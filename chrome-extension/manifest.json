@@ -39,7 +39,7 @@
     "webNavigation"
   ],
 
-  "host_permissions": [
+  "optional_host_permissions": [
     "https://*/*",
     "http://*/*"
   ],

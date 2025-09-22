@@ -15,7 +15,6 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.action.onClicked.addListener(async (tab) => {
   try {
     await chrome.sidePanel.open({ tabId: tab.id });
-    console.log('[BG] Side panel opened');
   } catch (error) {
     console.error('[BG] Failed to open side panel:', error);
   }
@@ -67,7 +66,6 @@ async function ensureOffscreenDocument() {
     });
 
     offscreenCreated = true;
-    console.log('[BG] Offscreen document created');
   } catch (error) {
     console.error('[BG] Failed to create offscreen document:', error);
   }
@@ -75,7 +73,6 @@ async function ensureOffscreenDocument() {
 
 // Message routing between UI and offscreen
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[BG] Message received:', message.type, 'from:', sender.id);
 
   // Handle captured content from content scripts
   if (message.type === 'capturedContent') {
@@ -171,7 +168,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.history.onVisited.addListener((historyItem) => {
   // Skip internal URLs
   if (!isInternalUrl(historyItem.url)) {
-    console.log('[BG] Page visited:', historyItem.url);
     // Queue for ingestion
     queuePageForIngestion(historyItem);
   }
@@ -179,7 +175,6 @@ chrome.history.onVisited.addListener((historyItem) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && !isInternalUrl(tab.url)) {
-    console.log('[BG] Tab completed loading:', tab.url);
     // Trigger content extraction and ingestion
     queuePageForIngestion({
       url: tab.url,
@@ -196,7 +191,7 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, url, frameId }) => {
     if (frameId !== 0) return; // only top-level frames
     if (!/^https?:\/\//.test(url)) return; // only http/https
 
-    console.log('[BG] Navigation completed:', url);
+    // Navigation completed: trigger auto-capture message to content script
 
     // Send auto-capture message to content script
     chrome.tabs.sendMessage(tabId, { type: 'autoCapture' }, () => {
@@ -215,7 +210,6 @@ async function extractPageContent(url, sendResponse) {
     const tabs = await chrome.tabs.query({ url: url });
 
     if (tabs.length === 0) {
-      console.log('[BG] No open tab found for URL:', url);
       sendResponse({ error: 'No open tab found for URL' });
       return;
     }
@@ -270,12 +264,6 @@ async function sendMessageWithRetry(tabId, message, attempts = 3, delayMs = 300)
 // Handle captured content from content scripts
 async function handleCapturedContent(payload, sendResponse) {
   try {
-    console.log('[BG] Captured content for:', payload.url, {
-      textLen: (payload.text || '').length,
-      hadSummary: !!payload.summary,
-      summaryLen: payload.summary ? payload.summary.length : 0
-    });
-
     const key = 'capturedContentByUrl';
     const store = await chrome.storage.local.get(key);
     const map = store[key] || {};
@@ -310,8 +298,6 @@ async function handleCapturedContent(payload, sendResponse) {
       }).then((resp) => {
         if (resp?.error) {
           console.warn('[BG] Offscreen direct ingest error:', resp.error);
-        } else {
-          console.log('[BG] Offscreen direct ingest response:', resp?.status || resp);
         }
       }).catch(() => void chrome.runtime.lastError);
 
@@ -321,8 +307,6 @@ async function handleCapturedContent(payload, sendResponse) {
       }).then((resp) => {
         if (resp?.error) {
           console.warn('[BG] Offscreen queue ingest error:', resp.error);
-        } else {
-          console.log('[BG] Offscreen queue ingest response:', resp?.status || resp);
         }
       }).catch(() => void chrome.runtime.lastError);
 
@@ -366,7 +350,6 @@ async function deleteCapturedEntries(urls, sendResponse) {
     }
 
     await chrome.storage.local.set({ [key]: map });
-    console.log('[BG] Deleted', removed, 'captured entries');
     sendResponse({ success: true, removed });
   } catch (error) {
     console.error('[BG] Failed to delete captured entries:', error);
@@ -420,23 +403,17 @@ async function processIngestionQueue() {
 
   try {
     await ensureOffscreenDocument();
-
-    console.log('[BG] Processing ingestion queue. Count:', ingestionQueue.length);
     while (ingestionQueue.length > 0) {
       const pageInfo = ingestionQueue.shift();
-      console.log('[BG] Ingesting page from queue:', pageInfo.url);
 
       try {
         // Try to extract real content if possible
         const tabs = await chrome.tabs.query({ url: pageInfo.url });
         let extractedContent = null;
-
-        console.log('[BG] tabs.query result count:', tabs.length, 'for URL:', pageInfo.url);
         // Check host permission for this origin to clarify why extraction may fail
         try {
           const origin = new URL(pageInfo.url).origin + '/*';
           const hasPerm = await chrome.permissions.contains({ origins: [origin] });
-          console.log('[BG] Host permission', hasPerm ? 'granted' : 'missing', 'for', origin);
           if (!hasPerm) {
             console.warn('[BG] No host permission for origin; content script and scripting extraction may be blocked unless user grants access.');
           }
@@ -446,24 +423,20 @@ async function processIngestionQueue() {
         if (tabs.length > 0) {
           try {
             extractedContent = await sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });
-            if (extractedContent && !extractedContent.error) {
-              console.log('[BG] Content script extracted:', {
-                url: pageInfo.url,
-                title: extractedContent.title,
-                textLen: (extractedContent.text || '').length
-              });
-            }
           } catch (e) {
             console.warn('[BG] Failed to extract via content script, trying scripting for:', pageInfo.url, e.message);
+            // Option C: request optional host permission for this origin when needed for scripting fallback
+            try {
+              const origin = new URL(pageInfo.url).origin + '/*';
+              const hasPerm = await chrome.permissions.contains({ origins: [origin] });
+              if (!hasPerm) {
+                const granted = await chrome.permissions.request({ origins: [origin] });
+              }
+            } catch (reqErr) {
+              console.warn('[BG] Optional host permission request failed:', reqErr?.message || reqErr);
+            }
             try {
               extractedContent = await extractViaScripting(tabs[0]);
-              if (extractedContent && !extractedContent.error) {
-                console.log('[BG] Scripting extracted:', {
-                  url: pageInfo.url,
-                  title: extractedContent.title,
-                  textLen: (extractedContent.text || '').length
-                });
-              }
             } catch (e2) {
               console.warn('[BG] Fallback scripting extraction failed:', e2.message);
             }
@@ -471,11 +444,6 @@ async function processIngestionQueue() {
         }
 
         // Send to offscreen for processing
-        console.log('[BG] Sending ingest-page to offscreen:', {
-          url: pageInfo.url,
-          hasExtracted: !!extractedContent,
-          extractedLen: extractedContent ? (extractedContent.text || '').length : 0
-        });
         const response = await chrome.runtime.sendMessage({
           target: 'offscreen',
           type: 'ingest-page',
@@ -484,12 +452,8 @@ async function processIngestionQueue() {
             extractedContent
           }
         });
-
-        console.log('[BG] Offscreen ingest response:', response);
         if (response?.error) {
           console.error('[BG] Ingestion failed:', response.error);
-        } else {
-          console.log('[BG] Page ingested successfully:', pageInfo.url);
         }
       } catch (error) {
         console.error('[BG] Failed to process page:', pageInfo.url, error);

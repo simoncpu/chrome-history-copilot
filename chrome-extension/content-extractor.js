@@ -34,7 +34,6 @@
       if (text.length > MAX_CHARS) {
         text = text.slice(0, MAX_CHARS) + '...';
       }
-      console.log('[CONTENT-EXTRACTOR] Extracted text length:', text.length, 'url:', location.href);
       return text;
     } catch (e) {
       console.warn('[CONTENT-EXTRACTOR] Failed to extract text:', e);
@@ -52,10 +51,7 @@
       // If readily available, we can summarize without explicit gesture
       try {
         const caps = await window.ai.summarizer.capabilities();
-        console.log('[CONTENT-EXTRACTOR] Summarizer capabilities:', caps);
         if (caps?.available !== 'readily') {
-          // Not readily available (likely needs user activation)
-          console.log('[CONTENT-EXTRACTOR] Summarizer not readily available; skipping summarize');
           return null;
         }
       } catch (_) {
@@ -75,14 +71,12 @@
         const MAX = 32000;
         const input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
 
-        console.log('[CONTENT-EXTRACTOR] Summarizing content; inputLen:', input.length);
         const summary = await summarizer.summarize(input, {
           context: `Web page titled "${document.title || ''}" from ${location.hostname}`,
           language: 'en',
           outputLanguage: 'en'
         });
         if (typeof summary === 'string') {
-          console.log('[CONTENT-EXTRACTOR] Summary generated length:', summary.length);
           return summary;
         }
         return null;
@@ -127,7 +121,6 @@
 
           // Skip trivial pages
           if (!text || text.length < 100) {
-            console.log('[CONTENT-EXTRACTOR] Skipping trivial page:', location.href);
             return;
           }
 
@@ -148,12 +141,6 @@
           };
 
           // Send captured content to background for storage
-          console.log('[CONTENT-EXTRACTOR] Sending capturedContent:', {
-            url: payload.url,
-            textLen: payload.text.length,
-            hadSummary: !!payload.summary,
-            summaryLen: payload.summary ? payload.summary.length : 0
-          });
           chrome.runtime.sendMessage({
             type: 'capturedContent',
             payload
@@ -176,5 +163,4 @@
     return false;
   });
 
-  console.log('[CONTENT-EXTRACTOR] Content script loaded for:', location.href);
 })();

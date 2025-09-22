@@ -2,7 +2,7 @@
  * AI History Search - Search Page Controller
  */
 
-console.log('[SEARCH] Initializing search page');
+ 
 
 // DOM elements
 let searchInput;
@@ -25,10 +25,9 @@ let hasMoreResults = false;
 let lastBatch = [];
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => gatePermissionsThen(initializeSearchPage));
+document.addEventListener('DOMContentLoaded', initializeSearchPage);
 
 function initializeSearchPage() {
-  console.log('[SEARCH] DOM loaded, initializing...');
 
   // Get DOM elements
   searchInput = document.getElementById('searchInput');
@@ -56,39 +55,11 @@ function initializeSearchPage() {
   // Set up tab navigation
   setupTabNavigation();
 
-  console.log('[SEARCH] Search page initialized');
+  
 }
 
-// Permission gating
-async function gatePermissionsThen(next) {
-  const overlay = document.getElementById('permissionOverlay');
-  const grantBtn = document.getElementById('grantAllSites');
-  const settingsBtn = document.getElementById('openExtSettings');
-
-  const hasGlobal = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
-  if (hasGlobal) {
-    overlay?.classList.add('hidden');
-    next();
-    return;
-  }
-
-  // Show overlay and wire buttons
-  overlay?.classList.remove('hidden');
-  grantBtn?.addEventListener('click', async () => {
-    try {
-      const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
-      if (granted) {
-        overlay?.classList.add('hidden');
-        next();
-      }
-    } catch (e) {
-      console.warn('[SEARCH] Grant all sites failed:', e);
-    }
-  });
-  settingsBtn?.addEventListener('click', () => {
-    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
-  });
-}
+// Note: Site access is optional; UI initializes regardless. The debug page
+// and background fallback will request optional host permissions if needed.
 
 function setupEventListeners() {
   // Search input handlers
@@ -184,7 +155,6 @@ function handleLoadMore() {
 
 // Search execution
 async function performSearch(query, offset = 0) {
-  console.log('[SEARCH] Performing search:', query, 'offset:', offset);
 
   if (isLoading) return;
 

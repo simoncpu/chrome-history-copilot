@@ -3,7 +3,7 @@
  * Handles SQLite database, embeddings, and heavy processing tasks
  */
 
-console.log('[OFFSCREEN] Initializing offscreen document');
+// Initialize offscreen document
 
 // Database and ML state
 let db = null;
@@ -14,7 +14,6 @@ let aiPrefs = { enableReranker: false, allowCloudModel: true };
 
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[OFFSCREEN] Message received:', message.type);
 
   handleMessage(message, sendResponse);
   return true; // Keep message channel open for async responses
@@ -133,8 +132,6 @@ async function handleMessage(message, sendResponse) {
 async function initialize() {
   if (isInitialized) return;
 
-  console.log('[OFFSCREEN] Starting initialization...');
-
   try {
     // Initialize SQLite database
     await initializeDatabase();
@@ -146,7 +143,6 @@ async function initialize() {
     await initializeEmbeddings();
 
     isInitialized = true;
-    console.log('[OFFSCREEN] Initialization complete');
   } catch (error) {
     console.error('[OFFSCREEN] Initialization failed:', error);
     throw error;
@@ -169,8 +165,6 @@ async function refreshAiPrefs() {
 
 // Database initialization
 async function initializeDatabase() {
-  console.log('[DB] Initializing SQLite database...');
-
   try {
     // Prepare sqlite3 config to suppress harmless OPFS warning during init
     // This warning appears when running on the main thread where Atomics.wait isn't allowed.
@@ -188,9 +182,8 @@ async function initializeDatabase() {
     // Import sqlite3 module
     const sqlite3InitModule = (await import(chrome.runtime.getURL('lib/sqlite3.mjs'))).default;
 
-    console.log('[DB] Loading SQLite WASM...');
     const sqlite3 = await sqlite3InitModule({
-      print: (...args) => console.log('[SQLITE]', ...args),
+      print: () => {},
       printErr: (...args) => {
         // Filter out harmless OPFS warning since we use IndexedDB VFS
         const message = args.join(' ');
@@ -201,11 +194,8 @@ async function initializeDatabase() {
       },
     });
 
-    console.log('[DB] SQLite WASM loaded, version:', sqlite3.version.libVersion);
-
     // Use IndexedDB VFS (default)
     const dbPath = '/ai-history.db';
-    console.log('[DB] Opening IndexedDB database:', dbPath);
     const sqliteDb = new sqlite3.oo1.DB(dbPath, 'c');
 
     // Create database wrapper with our API
@@ -242,7 +232,6 @@ class DatabaseWrapper {
 
     const isString = typeof summary === 'string';
     const normalized = isString ? summary : null;
-    console.log('[DB] updateSummaryByUrl:', { url, id, summaryType: typeof summary, len: isString ? summary.length : 0 });
     const upd = this.db.prepare('UPDATE pages SET summary = ? WHERE id = ?');
     upd.bind([normalized, id]);
     upd.step();
@@ -269,7 +258,6 @@ class DatabaseWrapper {
           embedding FLOAT[384]
         )
       `);
-      console.log('[DB] sqlite-vec pages table created successfully');
       usingVecTable = true;
     } catch (vecError) {
       console.warn('[DB] sqlite-vec not available, falling back to regular table:', vecError);
@@ -312,7 +300,6 @@ class DatabaseWrapper {
           content_text
         )
       `);
-      console.log('[DB] FTS5 table created successfully');
     } catch (ftsError) {
       console.warn('[DB] FTS5 not available, search will use fallback methods:', ftsError);
     }
@@ -326,13 +313,10 @@ class DatabaseWrapper {
           CREATE INDEX IF NOT EXISTS idx_pages_visit_count ON pages(visit_count);
           CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON page_embeddings(updated_at);
         `);
-        console.log('[DB] Created indexes for regular tables');
       } catch (indexError) {
         console.warn('[DB] Could not create indexes:', indexError);
       }
     }
-
-    console.log('[DB] Database schema created successfully');
   }
 
   async insert(table, data) {
@@ -485,12 +469,7 @@ class DatabaseWrapper {
             WHERE id = ?
           `);
           const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
-          console.log('[DB] Fallback UPDATE pages:', {
-            id: existingId,
-            url: pageData.url,
-            hasSummary: typeof pageData.summary === 'string',
-            summaryLen: typeof pageData.summary === 'string' ? pageData.summary.length : 0
-          });
+          // silent
           upd.bind([
             pageData.domain,
             pageData.title,
@@ -542,11 +521,7 @@ class DatabaseWrapper {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
-          console.log('[DB] Fallback INSERT pages:', {
-            url: pageData.url,
-            hasSummary: typeof pageData.summary === 'string',
-            summaryLen: typeof pageData.summary === 'string' ? pageData.summary.length : 0
-          });
+          // silent
           stmt.bind([
             pageData.url,
             pageData.domain,
@@ -603,7 +578,7 @@ class DatabaseWrapper {
   async search(query, options = {}) {
     const { mode = 'hybrid-rerank', limit = 25, offset = 0 } = options;
 
-    console.log(`[DB] Performing ${mode} search for:`, query);
+    // perform search
 
     switch (mode) {
       case 'text':
@@ -923,7 +898,7 @@ class DatabaseWrapper {
   }
 
   async clear() {
-    console.log('[DB] Clearing all tables...');
+    // Clear all tables
     try {
       this.db.exec('DELETE FROM pages_fts');
     } catch (error) {
@@ -940,13 +915,12 @@ class DatabaseWrapper {
 
     this.db.exec('DELETE FROM pages');
     this.db.exec('VACUUM');
-    console.log('[DB] Database cleared');
   }
 }
 
 // Embeddings initialization
 async function initializeEmbeddings() {
-  console.log('[ML] Initializing embedding model (Transformers.js)...');
+  // Initialize embedding model (Transformers.js)
 
   try {
     const mod = await import(chrome.runtime.getURL('lib/transformers.min.js'));
@@ -976,7 +950,6 @@ async function initializeEmbeddings() {
         return data instanceof Float32Array ? data : new Float32Array(data);
       }
     };
-    console.log('[ML] Embedding model ready');
   } catch (e) {
     // Expected in offline dev or when network/cache unavailable; use fallback
     console.warn('[ML] Embedding model init failed, using fallback mock:', e?.message || e);
@@ -1015,13 +988,7 @@ async function ingestPage(pageInfo) {
       summary: null
     };
 
-    // Log extraction status
-    console.log('[OFFSCREEN] ingestPage extracted:', {
-      url: pageInfo.url,
-      title: content.title,
-      textLen: (content.text || '').length,
-      hadSummary: !!content.summary
-    });
+    // Prepare summary
     // If we don't have a summary yet, try to generate one offscreen (no user interaction)
     let summary = content.summary;
     if (!summary) {
@@ -1039,11 +1006,6 @@ async function ingestPage(pageInfo) {
     if (summary == null) summary = '';
 
     // Store in database
-    console.log('[OFFSCREEN] Storing page:', {
-      url: pageInfo.url,
-      summaryLen: typeof summary === 'string' ? summary.length : 0,
-      embedDim: embedding?.length || 0
-    });
     const pageId = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
@@ -1056,7 +1018,6 @@ async function ingestPage(pageInfo) {
       embedding: embedding
     });
 
-    console.log('[OFFSCREEN] Ingested page stored with id:', pageId.id);
     return { status: 'success', pageId: pageId.id };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest page:', error);
@@ -1066,7 +1027,6 @@ async function ingestPage(pageInfo) {
 
 // Ingest captured content directly
 async function ingestCapturedContent(capturedData) {
-  console.log('[OFFSCREEN] Ingesting captured content:', capturedData.url);
 
   try {
     // Generate summary if missing
@@ -1086,13 +1046,6 @@ async function ingestCapturedContent(capturedData) {
     if (summary == null) summary = '';
 
     // Store in database
-    console.log('[OFFSCREEN] Storing captured:', {
-      url: capturedData.url,
-      textLen: (capturedData.text || '').length,
-      hadIncomingSummary: typeof capturedData.summary === 'string',
-      finalSummaryLen: typeof summary === 'string' ? summary.length : 0,
-      embedDim: embedding?.length || 0
-    });
     const pageId = await db.insert('pages', {
       url: capturedData.url,
       title: capturedData.title,
@@ -1105,7 +1058,6 @@ async function ingestCapturedContent(capturedData) {
       embedding: embedding
     });
 
-    console.log('[OFFSCREEN] Successfully ingested captured content for:', capturedData.url);
     return { status: 'success', pageId: pageId.id, source: 'captured' };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest captured content:', error);
@@ -1123,9 +1075,7 @@ async function trySummarizeOffscreen(text, url, title) {
     if (globalThis?.ai?.summarizer) {
       try {
         const caps = await globalThis.ai.summarizer.capabilities();
-        console.log('[OFFSCREEN] Summarizer capabilities:', caps);
         if (caps?.available !== 'readily') {
-          console.log('[OFFSCREEN] Summarizer not readily available (needs gesture); skipping offscreen summarize');
           return null;
         }
       } catch (_) {
@@ -1143,27 +1093,23 @@ async function trySummarizeOffscreen(text, url, title) {
         const MAX = 8000;
         let input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
         try {
-          console.log('[OFFSCREEN] Summarizing via ai.summarizer; inputLen:', input.length);
           const summary = await s.summarize(input, {
             context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
             language: 'en',
             outputLanguage: 'en'
           });
           if (typeof summary === 'string' && summary.trim()) {
-            console.log('[OFFSCREEN] Summarizer produced summaryLen:', summary.length);
             return summary;
           }
         } catch (e) {
           if ((e?.name === 'QuotaExceededError' || /too\s+large/i.test(e?.message)) && input.length > 4000) {
             input = text.slice(0, 4000) + '...';
-            console.log('[OFFSCREEN] Retrying summarize with smaller inputLen:', input.length);
             const summary = await s.summarize(input, {
               context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
               language: 'en',
               outputLanguage: 'en'
             });
             if (typeof summary === 'string' && summary.trim()) {
-              console.log('[OFFSCREEN] Summarizer produced (retry) summaryLen:', summary.length);
               return summary;
             }
           }
@@ -1182,13 +1128,11 @@ async function trySummarizeOffscreen(text, url, title) {
         try {
           const MAX = 8000;
           const input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
-          console.log('[OFFSCREEN] Summarizing via legacy Summarizer; inputLen:', input.length);
           const summary = await summarizer.summarize(input, {
             context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
             language: 'en', outputLanguage: 'en'
           });
           if (typeof summary === 'string' && summary.trim()) {
-            console.log('[OFFSCREEN] Legacy summarizer produced summaryLen:', summary.length);
             return summary;
           }
         } finally {
@@ -1231,7 +1175,7 @@ function buildFallbackSummary(text, title = '', url = '') {
 
 // Ingest all items from captured content queue
 async function ingestCapturedQueue() {
-  console.log('[OFFSCREEN] Processing captured content queue...');
+  // Process captured content queue
 
   try {
     // Request captured queue from background
@@ -1245,11 +1189,10 @@ async function ingestCapturedQueue() {
     const urls = Object.keys(capturedMap);
 
     if (urls.length === 0) {
-      console.log('[OFFSCREEN] No captured content to process');
       return { status: 'success', processed: 0 };
     }
 
-    console.log(`[OFFSCREEN] Processing ${urls.length} captured items...`);
+    // Process items
 
     let processed = 0;
     const processedUrls = [];
@@ -1276,7 +1219,6 @@ async function ingestCapturedQueue() {
       });
     }
 
-    console.log(`[OFFSCREEN] Processed ${processed}/${urls.length} captured items`);
     return { status: 'success', processed, total: urls.length };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to process captured queue:', error);
@@ -1286,7 +1228,6 @@ async function ingestCapturedQueue() {
 
 // Search implementation
 async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
-  console.log('[OFFSCREEN] Searching:', query, 'mode:', mode);
 
   try {
     let queryEmbedding = null;
@@ -1329,7 +1270,7 @@ async function embed(text) {
 
 // Database utilities
 async function clearDatabase() {
-  console.log('[OFFSCREEN] Clearing database...');
+  // Clear database
   if (db) {
     await db.clear();
   }
@@ -1345,7 +1286,7 @@ async function getDatabaseStats() {
 
 // Utility functions for debug page
 async function executeSQL({ query, writeMode = false }) {
-  console.log('[OFFSCREEN] Executing SQL:', query);
+  // Execute SQL
 
   if (!db || !db.db) {
     return { error: 'Database not initialized' };
@@ -1390,7 +1331,7 @@ async function executeSQL({ query, writeMode = false }) {
 }
 
 async function clearModelCache() {
-  console.log('[OFFSCREEN] Clearing model cache...');
+  // Clear model cache
 
   try {
     // Reset embedding model
@@ -1402,7 +1343,7 @@ async function clearModelCache() {
       global.gc();
     }
 
-    console.log('[OFFSCREEN] Model cache cleared');
+    // Model cache cleared
   } catch (error) {
     console.error('[OFFSCREEN] Failed to clear model cache:', error);
     throw error;

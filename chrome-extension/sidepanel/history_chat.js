@@ -3,8 +3,6 @@
  */
 import { aiBridge } from '../bridge/ai-bridge.js';
 
-console.log('[CHAT] Initializing chat page');
-
 // DOM elements
 let chatMessages;
 let chatInput;
@@ -20,10 +18,9 @@ let chatHistory = [];
 let aiSession = null;
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => gatePermissionsThen(initializeChatPage));
+document.addEventListener('DOMContentLoaded', initializeChatPage);
 
 function initializeChatPage() {
-  console.log('[CHAT] DOM loaded, initializing...');
 
   // Get DOM elements
   chatMessages = document.getElementById('chatMessages');
@@ -51,39 +48,11 @@ function initializeChatPage() {
   // Load chat history
   loadChatHistory();
 
-  console.log('[CHAT] Chat page initialized');
+  
 }
 
-// Permission gating
-async function gatePermissionsThen(next) {
-  const overlay = document.getElementById('permissionOverlay');
-  const grantBtn = document.getElementById('grantAllSites');
-  const settingsBtn = document.getElementById('openExtSettings');
-
-  const hasGlobal = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
-  if (hasGlobal) {
-    overlay?.classList.add('hidden');
-    next();
-    return;
-  }
-
-  // Show overlay and wire buttons
-  overlay?.classList.remove('hidden');
-  grantBtn?.addEventListener('click', async () => {
-    try {
-      const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
-      if (granted) {
-        overlay?.classList.add('hidden');
-        next();
-      }
-    } catch (e) {
-      console.warn('[CHAT] Grant all sites failed:', e);
-    }
-  });
-  settingsBtn?.addEventListener('click', () => {
-    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
-  });
-}
+// Note: Site access is optional; UI initializes regardless. The debug page
+// and background fallback will request optional host permissions if needed.
 
 function setupEventListeners() {
   // Chat form submission
@@ -130,7 +99,7 @@ async function handleChatSubmit(e) {
   const message = chatInput.value.trim();
   if (!message || isGenerating) return;
 
-  console.log('[CHAT] Submitting message:', message);
+  
 
   // Clear input and reset height
   chatInput.value = '';
@@ -193,7 +162,7 @@ async function generateResponse(userMessage) {
 }
 
 async function searchHistory(query) {
-  console.log('[CHAT] Searching history for:', query);
+  
 
   try {
     const response = await chrome.runtime.sendMessage({
@@ -218,7 +187,7 @@ async function searchHistory(query) {
 }
 
 async function generateAIResponse(userMessage, searchResults) {
-  console.log('[CHAT] Generating AI response for:', userMessage);
+  
 
   // Try to use Chrome AI API
   try {
@@ -409,7 +378,7 @@ function scrollToBottom() {
 async function initializeAI() {
   try {
     const caps = await aiBridge.initialize();
-    console.log('[CHAT] AI capabilities:', caps);
+    
     if (caps?.languageModel?.available === 'readily') {
       statusText.textContent = 'AI ready';
     } else if (caps?.languageModel) {

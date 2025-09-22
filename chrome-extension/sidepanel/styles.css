@@ -63,7 +63,7 @@ body {
 
 /* Header */
 .header {
-  padding: 20px;
+  padding: 16px 20px 12px;
   background: var(--surface-elevated);
   backdrop-filter: blur(10px);
   position: sticky;
@@ -71,66 +71,77 @@ body {
   z-index: 10;
   border-radius: 0 0 var(--border-radius-soft) var(--border-radius-soft);
   box-shadow: var(--shadow-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
-  margin-bottom: 16px;
+  margin: 0;
   color: var(--text-primary);
   background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  flex-shrink: 0;
 }
 
 .nav-tabs {
-  display: flex;
-  gap: 8px;
-  background: var(--surface);
-  padding: 6px;
-  border-radius: var(--border-radius-soft);
-  backdrop-filter: blur(10px);
+  display: inline-flex;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  padding: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
 .tab-button {
-  flex: 1;
-  padding: 12px 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  border-radius: var(--border-radius-soft);
+  border-radius: 9px;
   cursor: pointer;
   transition: var(--transition-smooth);
   position: relative;
-  overflow: hidden;
+  white-space: nowrap;
+  min-width: auto;
 }
 
-.tab-button:hover {
-  background: var(--surface-elevated);
+.tab-button:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.6);
   color: var(--text-primary);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-soft);
+}
+
+.tab-button:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+.tab-button:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .tab-button.active {
-  background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
-  color: white;
-  box-shadow: var(--shadow-glow);
-  transform: translateY(-2px);
+  background: white;
+  color: var(--primary-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  font-weight: 600;
 }
 
-.tab-button.active::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
-  border-radius: inherit;
+.tab-button-icon {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.tab-button.active .tab-button-icon {
+  opacity: 1;
 }
 
 /* Main Content */

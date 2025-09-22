@@ -11,9 +11,15 @@
     <!-- Header -->
     <header class="header">
       <h1 class="title">AI History Chat</h1>
-      <div class="nav-tabs">
-        <button class="tab-button" data-page="search">Search</button>
-        <button class="tab-button active" data-page="chat">Chat</button>
+      <div class="nav-tabs" role="tablist" aria-label="Navigation">
+        <button class="tab-button" data-page="search" role="tab" aria-selected="false" aria-controls="search-panel">
+          <span class="tab-button-icon" aria-hidden="true">🔍</span>
+          Search
+        </button>
+        <button class="tab-button active" data-page="chat" role="tab" aria-selected="true" aria-controls="chat-panel">
+          <span class="tab-button-icon" aria-hidden="true">💬</span>
+          Chat
+        </button>
       </div>
     </header>
 

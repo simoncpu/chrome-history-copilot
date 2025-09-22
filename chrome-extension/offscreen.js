@@ -35,6 +35,16 @@ async function handleMessage(message, sendResponse) {
         sendResponse(result);
         break;
 
+      case 'ingest-captured-payload':
+        const capturedResult = await ingestCapturedContent(message.data);
+        sendResponse(capturedResult);
+        break;
+
+      case 'ingest-captured-queue':
+        const queueResult = await ingestCapturedQueue();
+        sendResponse(queueResult);
+        break;
+
       case 'search':
         const searchResults = await search(message.data);
         sendResponse(searchResults);
@@ -677,7 +687,7 @@ class DatabaseWrapper {
 async function initializeEmbeddings() {
   console.log('[ML] Initializing embedding model...');
 
-  // TODO: Import and initialize Transformers.js
+  // Transformers.js initialization handled separately
   // For now, create a mock embedding interface
   embedModel = {
     initialized: true,
@@ -696,25 +706,46 @@ async function ingestPage(pageInfo) {
   console.log('[OFFSCREEN] Ingesting page:', pageInfo.url);
 
   try {
-    // Extract page content (mock for now)
-    const content = await extractPageContent(pageInfo);
+    // Use extracted content if available, otherwise try to request it
+    let content;
+    if (pageInfo.extractedContent) {
+      content = {
+        title: pageInfo.extractedContent.title || pageInfo.title || 'Untitled',
+        text: pageInfo.extractedContent.text || '',
+        summary: pageInfo.extractedContent.summary || null
+      };
+    } else {
+      // Try to request content extraction from background
+      content = await requestPageContent(pageInfo.url);
+      if (!content) {
+        // Fallback to basic info
+        content = {
+          title: pageInfo.title || 'Untitled',
+          text: '',
+          summary: null
+        };
+      }
+    }
 
-    // Generate embedding
-    const embedding = await embed(content.title + ' ' + content.text);
+    // Generate embedding only if we have meaningful text
+    let embedding = null;
+    const textToEmbed = content.title + ' ' + content.text;
+    if (textToEmbed.trim().length > 10) {
+      embedding = await embed(textToEmbed);
+    }
 
-    // Store in database (embedding included in page data for vec0 table)
+    // Store in database
     const pageId = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
       content_text: content.text,
+      summary: content.summary,
       domain: new URL(pageInfo.url).hostname,
       first_visit_at: pageInfo.visitTime || Date.now(),
       last_visit_at: pageInfo.visitTime || Date.now(),
       visit_count: 1,
       embedding: embedding
     });
-
-    // Embedding is handled automatically in insertPage method
 
     return { status: 'success', pageId: pageId.id };
   } catch (error) {
@@ -723,14 +754,113 @@ async function ingestPage(pageInfo) {
   }
 }
 
-// Content extraction (mock)
-async function extractPageContent(pageInfo) {
-  // TODO: Implement real content extraction with scripting API
-  return {
-    title: pageInfo.title || 'Untitled',
-    text: `Mock content for ${pageInfo.url}`,
-    summary: null
-  };
+// Ingest captured content directly
+async function ingestCapturedContent(capturedData) {
+  console.log('[OFFSCREEN] Ingesting captured content:', capturedData.url);
+
+  try {
+    // Generate embedding
+    const textToEmbed = capturedData.title + ' ' + capturedData.text;
+    const embedding = await embed(textToEmbed);
+
+    // Store in database
+    const pageId = await db.insert('pages', {
+      url: capturedData.url,
+      title: capturedData.title,
+      content_text: capturedData.text,
+      summary: capturedData.summary,
+      domain: capturedData.domain,
+      first_visit_at: capturedData.timestamp || Date.now(),
+      last_visit_at: capturedData.timestamp || Date.now(),
+      visit_count: 1,
+      embedding: embedding
+    });
+
+    console.log('[OFFSCREEN] Successfully ingested captured content for:', capturedData.url);
+    return { status: 'success', pageId: pageId.id, source: 'captured' };
+  } catch (error) {
+    console.error('[OFFSCREEN] Failed to ingest captured content:', error);
+    return { error: error.message };
+  }
+}
+
+// Ingest all items from captured content queue
+async function ingestCapturedQueue() {
+  console.log('[OFFSCREEN] Processing captured content queue...');
+
+  try {
+    // Request captured queue from background
+    const response = await chrome.runtime.sendMessage({ type: 'getCapturedQueue' });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to get captured queue');
+    }
+
+    const capturedMap = response.map || {};
+    const urls = Object.keys(capturedMap);
+
+    if (urls.length === 0) {
+      console.log('[OFFSCREEN] No captured content to process');
+      return { status: 'success', processed: 0 };
+    }
+
+    console.log(`[OFFSCREEN] Processing ${urls.length} captured items...`);
+
+    let processed = 0;
+    const processedUrls = [];
+
+    for (const url of urls) {
+      const capturedData = capturedMap[url];
+
+      try {
+        const result = await ingestCapturedContent(capturedData);
+        if (result.status === 'success') {
+          processed++;
+          processedUrls.push(url);
+        }
+      } catch (error) {
+        console.error('[OFFSCREEN] Failed to process captured item:', url, error);
+      }
+    }
+
+    // Delete processed entries from background storage
+    if (processedUrls.length > 0) {
+      await chrome.runtime.sendMessage({
+        type: 'deleteCapturedEntries',
+        urls: processedUrls
+      });
+    }
+
+    console.log(`[OFFSCREEN] Processed ${processed}/${urls.length} captured items`);
+    return { status: 'success', processed, total: urls.length };
+  } catch (error) {
+    console.error('[OFFSCREEN] Failed to process captured queue:', error);
+    return { error: error.message };
+  }
+}
+
+// Request page content extraction via background
+async function requestPageContent(url) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'extractPageContent',
+      url: url
+    });
+
+    if (response.error) {
+      console.warn('[OFFSCREEN] Content extraction failed for:', url, response.error);
+      return null;
+    }
+
+    return {
+      title: response.title || 'Untitled',
+      text: response.text || '',
+      summary: response.summary || null
+    };
+  } catch (error) {
+    console.warn('[OFFSCREEN] Failed to request content for:', url, error);
+    return null;
+  }
 }
 
 // Search implementation
@@ -780,7 +910,7 @@ async function getDatabaseStats() {
   return await db.stats();
 }
 
-// Debug and utility functions
+// Utility functions for debug page
 async function executeSQL({ query, writeMode = false }) {
   console.log('[OFFSCREEN] Executing SQL:', query);
 
@@ -821,8 +951,7 @@ async function executeSQL({ query, writeMode = false }) {
       query: query
     };
   } catch (error) {
-    console.error('[OFFSCREEN] SQL execution failed:', error);
-    console.error('[OFFSCREEN] Query was:', query);
+    console.error('[OFFSCREEN] SQL execution failed:', error, 'Query:', query);
     return { error: error.message, query: query };
   }
 }

@@ -35,7 +35,8 @@
     "tabs",
     "activeTab",
     "contextMenus",
-    "offscreen"
+    "offscreen",
+    "webNavigation"
   ],
 
   "host_permissions": [
@@ -51,6 +52,14 @@
         "lib/sqlite3.mjs"
       ],
       "matches": ["<all_urls>"]
+    }
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-extractor.js"],
+      "run_at": "document_idle"
     }
   ],
 

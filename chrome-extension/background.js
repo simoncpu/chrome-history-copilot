@@ -74,6 +74,24 @@ async function ensureOffscreenDocument() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[BG] Message received:', message.type, 'from:', sender.id);
 
+  // Handle captured content from content scripts
+  if (message.type === 'capturedContent') {
+    handleCapturedContent(message.payload, sendResponse);
+    return true; // Async response
+  }
+
+  // Handle requests for captured content queue (from offscreen)
+  if (message.type === 'getCapturedQueue') {
+    getCapturedQueue(sendResponse);
+    return true; // Async response
+  }
+
+  // Handle deletion of captured entries (from offscreen)
+  if (message.type === 'deleteCapturedEntries') {
+    deleteCapturedEntries(message.urls, sendResponse);
+    return true; // Async response
+  }
+
   // Route messages to offscreen document
   if (message.target === 'offscreen') {
     ensureOffscreenDocument().then(() => {
@@ -118,6 +136,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    case 'extractPageContent':
+      extractPageContent(message.url, sendResponse);
+      return true; // Async response
+
     default:
       console.warn('[BG] Unknown message type:', message.type);
       sendResponse({ error: 'Unknown message type' });
@@ -144,7 +166,146 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// Page ingestion queue
+// Auto-capture on navigation completion
+chrome.webNavigation.onCompleted.addListener(({ tabId, url, frameId }) => {
+  try {
+    if (frameId !== 0) return; // only top-level frames
+    if (!/^https?:\/\//.test(url)) return; // only http/https
+
+    console.log('[BG] Navigation completed:', url);
+
+    // Send auto-capture message to content script
+    chrome.tabs.sendMessage(tabId, { type: 'autoCapture' }, () => {
+      // Ignore errors when content script isn't present or page is restricted
+      void chrome.runtime.lastError;
+    });
+  } catch (e) {
+    // Ignore errors in navigation handler
+  }
+}, { url: [{ schemes: ['http', 'https'] }] });
+
+// Content extraction using chrome.scripting API
+async function extractPageContent(url, sendResponse) {
+  try {
+    // Find tab with the URL
+    const tabs = await chrome.tabs.query({ url: url });
+
+    if (tabs.length === 0) {
+      console.log('[BG] No open tab found for URL:', url);
+      sendResponse({ error: 'No open tab found for URL' });
+      return;
+    }
+
+    const tab = tabs[0];
+
+    // Send message to content script
+    chrome.tabs.sendMessage(tab.id, { type: 'getPageContent' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[BG] Failed to extract content:', chrome.runtime.lastError.message);
+        sendResponse({ error: chrome.runtime.lastError.message });
+      } else {
+        sendResponse(response);
+      }
+    });
+
+  } catch (error) {
+    console.error('[BG] Content extraction error:', error);
+    sendResponse({ error: error.message });
+  }
+}
+
+// Handle captured content from content scripts
+async function handleCapturedContent(payload, sendResponse) {
+  try {
+    console.log('[BG] Captured content for:', payload.url);
+
+    const key = 'capturedContentByUrl';
+    const store = await chrome.storage.local.get(key);
+    const map = store[key] || {};
+
+    // Keep the latest capture per URL
+    map[payload.url] = payload;
+    await chrome.storage.local.set({ [key]: map });
+
+    // Notify side panel to ingest immediately if open
+    try {
+      const tabs = await chrome.tabs.query({});
+      const searchPanelUrl = chrome.runtime.getURL('sidepanel/history_search.html');
+      const chatPanelUrl = chrome.runtime.getURL('sidepanel/history_chat.html');
+
+      for (const tab of tabs) {
+        if (tab.url === searchPanelUrl || tab.url === chatPanelUrl) {
+          chrome.tabs.sendMessage(tab.id, { type: 'ingestCaptured' }, () => void chrome.runtime.lastError);
+        }
+      }
+    } catch (e) {
+      // Ignore notification errors
+    }
+
+    // Trigger offscreen ingestion
+    try {
+      await ensureOffscreenDocument();
+
+      // Send payload directly for immediate ingestion
+      chrome.runtime.sendMessage({
+        type: 'ingest-captured-payload',
+        data: payload
+      }, () => void chrome.runtime.lastError);
+
+      // Also send generic ingest signal for any queued items
+      chrome.runtime.sendMessage({
+        type: 'ingest-captured-queue'
+      }, () => void chrome.runtime.lastError);
+
+    } catch (e) {
+      console.warn('[BG] Offscreen ingestion not available:', e);
+    }
+
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[BG] Failed to handle captured content:', error);
+    sendResponse({ error: error.message });
+  }
+}
+
+// Get captured content queue for offscreen
+async function getCapturedQueue(sendResponse) {
+  try {
+    const key = 'capturedContentByUrl';
+    const store = await chrome.storage.local.get(key);
+    const map = store[key] || {};
+    sendResponse({ success: true, map });
+  } catch (error) {
+    console.error('[BG] Failed to get captured queue:', error);
+    sendResponse({ error: error.message });
+  }
+}
+
+// Delete captured entries after processing
+async function deleteCapturedEntries(urls, sendResponse) {
+  try {
+    const key = 'capturedContentByUrl';
+    const store = await chrome.storage.local.get(key);
+    const map = store[key] || {};
+
+    let removed = 0;
+    for (const url of urls) {
+      if (map[url]) {
+        delete map[url];
+        removed++;
+      }
+    }
+
+    await chrome.storage.local.set({ [key]: map });
+    console.log('[BG] Deleted', removed, 'captured entries');
+    sendResponse({ success: true, removed });
+  } catch (error) {
+    console.error('[BG] Failed to delete captured entries:', error);
+    sendResponse({ error: error.message });
+  }
+}
+
+// Page ingestion queue (legacy support)
 const ingestionQueue = [];
 let isProcessingQueue = false;
 
@@ -170,11 +331,34 @@ async function processIngestionQueue() {
       const pageInfo = ingestionQueue.shift();
 
       try {
+        // Try to extract real content if possible
+        const tabs = await chrome.tabs.query({ url: pageInfo.url });
+        let extractedContent = null;
+
+        if (tabs.length > 0) {
+          try {
+            extractedContent = await new Promise((resolve, reject) => {
+              chrome.tabs.sendMessage(tabs[0].id, { type: 'getPageContent' }, (response) => {
+                if (chrome.runtime.lastError) {
+                  reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                  resolve(response);
+                }
+              });
+            });
+          } catch (e) {
+            console.warn('[BG] Failed to extract content for:', pageInfo.url, e.message);
+          }
+        }
+
         // Send to offscreen for processing
         const response = await chrome.runtime.sendMessage({
           target: 'offscreen',
           type: 'ingest-page',
-          data: pageInfo
+          data: {
+            ...pageInfo,
+            extractedContent
+          }
         });
 
         if (response?.error) {

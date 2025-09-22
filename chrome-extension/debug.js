@@ -12,6 +12,10 @@ let exportDb, importFile, clearModelCache, clearDatabase;
 let operationProgress, progressFill;
 let logContainer, clearLogs, exportLogs, autoRefreshLogs;
 
+// Content analysis elements
+let analyzeRecentPages, showContentStats, testSearchModes;
+let contentAnalysis, analysisContent;
+
 // State
 let isConnected = false;
 let currentLogs = [];
@@ -40,6 +44,11 @@ const SAMPLE_QUERIES = [
   // Extension debugging
   'SELECT COUNT(*) as fts_entries FROM pages_fts;',
   'SELECT url, title, length(content_text) as content_length FROM pages WHERE content_text IS NOT NULL LIMIT 5;',
+
+  // Content extraction analysis
+  'SELECT url, title, length(content_text) as content_len, summary IS NOT NULL as has_summary FROM pages WHERE content_text IS NOT NULL ORDER BY last_visit_at DESC LIMIT 10;',
+  'SELECT domain, COUNT(*) as pages, AVG(length(content_text)) as avg_content_len FROM pages WHERE content_text IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10;',
+  'SELECT COUNT(*) as with_content, (SELECT COUNT(*) FROM pages) as total FROM pages WHERE content_text IS NOT NULL AND length(content_text) > 100;',
 
   // Performance analysis
   'SELECT domain, AVG(visit_count) as avg_visits, COUNT(*) as pages FROM pages GROUP BY domain HAVING COUNT(*) > 1 ORDER BY avg_visits DESC LIMIT 10;',
@@ -105,6 +114,13 @@ function initializeDOMElements() {
   clearLogs = document.getElementById('clearLogs');
   exportLogs = document.getElementById('exportLogs');
   autoRefreshLogs = document.getElementById('autoRefreshLogs');
+
+  // Content analysis elements
+  analyzeRecentPages = document.getElementById('analyzeRecentPages');
+  showContentStats = document.getElementById('showContentStats');
+  testSearchModes = document.getElementById('testSearchModes');
+  contentAnalysis = document.getElementById('contentAnalysis');
+  analysisContent = document.getElementById('analysisContent');
 }
 
 function setupEventListeners() {
@@ -129,6 +145,11 @@ function setupEventListeners() {
   clearLogs.addEventListener('click', handleClearLogs);
   exportLogs.addEventListener('click', handleExportLogs);
   autoRefreshLogs.addEventListener('change', toggleLogRefresh);
+
+  // Content analysis
+  analyzeRecentPages.addEventListener('click', handleAnalyzeRecentPages);
+  showContentStats.addEventListener('click', handleShowContentStats);
+  testSearchModes.addEventListener('click', handleTestSearchModes);
 
   // Keyboard shortcuts
   sqlQuery.addEventListener('keydown', (e) => {
@@ -648,6 +669,142 @@ function toggleLogRefresh() {
   }
 }
 
+async function handleAnalyzeRecentPages() {
+  log('Analyzing recent pages...', 'info');
+
+  try {
+    const query = `
+      SELECT
+        url, title, domain,
+        length(content_text) as content_len,
+        summary IS NOT NULL as has_summary,
+        visit_count,
+        datetime(last_visit_at/1000, 'unixepoch') as last_visit
+      FROM pages
+      WHERE content_text IS NOT NULL
+      ORDER BY last_visit_at DESC
+      LIMIT 20
+    `;
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'execute-sql',
+      data: { query, writeMode: false }
+    });
+
+    displayAnalysisResults(response, 'Recent Pages Analysis');
+  } catch (error) {
+    log(`Failed to analyze recent pages: ${error.message}`, 'error');
+  }
+}
+
+async function handleShowContentStats() {
+  log('Generating content statistics...', 'info');
+
+  try {
+    const queries = [
+      {
+        title: 'Overall Content Stats',
+        query: `
+          SELECT
+            COUNT(*) as total_pages,
+            COUNT(CASE WHEN content_text IS NOT NULL AND length(content_text) > 100 THEN 1 END) as with_content,
+            COUNT(CASE WHEN summary IS NOT NULL THEN 1 END) as with_summary,
+            AVG(length(content_text)) as avg_content_length
+          FROM pages
+        `
+      },
+      {
+        title: 'Content by Domain',
+        query: `
+          SELECT
+            domain,
+            COUNT(*) as pages,
+            COUNT(CASE WHEN content_text IS NOT NULL THEN 1 END) as with_content,
+            AVG(length(content_text)) as avg_content_len
+          FROM pages
+          GROUP BY domain
+          ORDER BY pages DESC
+          LIMIT 10
+        `
+      }
+    ];
+
+    let combinedResults = '<h3>Content Statistics</h3>';
+
+    for (const { title, query } of queries) {
+      const response = await chrome.runtime.sendMessage({
+        type: 'execute-sql',
+        data: { query, writeMode: false }
+      });
+
+      if (response.success) {
+        combinedResults += `<h4>${title}</h4>`;
+        combinedResults += formatQueryResults(response);
+      }
+    }
+
+    contentAnalysis.classList.remove('hidden');
+    analysisContent.innerHTML = combinedResults;
+
+  } catch (error) {
+    log(`Failed to generate content stats: ${error.message}`, 'error');
+  }
+}
+
+async function handleTestSearchModes() {
+  log('Testing search modes...', 'info');
+
+  const testQuery = 'AI technology';
+
+  try {
+    const modes = ['hybrid-rerank', 'hybrid-rrf', 'text', 'vector'];
+    let results = '<h3>Search Mode Test Results</h3>';
+    results += `<p>Test query: <strong>"${testQuery}"</strong></p>`;
+
+    for (const mode of modes) {
+      const response = await chrome.runtime.sendMessage({
+        type: 'search',
+        data: { query: testQuery, mode: mode, limit: 5 }
+      });
+
+      if (response.results) {
+        results += `<h4>${mode} (${response.results.length} results)</h4>`;
+        results += '<ul>';
+        response.results.forEach(result => {
+          results += `<li><strong>${escapeHtml(result.title || 'Untitled')}</strong><br>`;
+          results += `<small>${escapeHtml(result.url)}</small></li>`;
+        });
+        results += '</ul>';
+      } else {
+        results += `<h4>${mode}</h4><p>No results or error</p>`;
+      }
+    }
+
+    contentAnalysis.classList.remove('hidden');
+    analysisContent.innerHTML = results;
+
+  } catch (error) {
+    log(`Failed to test search modes: ${error.message}`, 'error');
+  }
+}
+
+function displayAnalysisResults(response, title) {
+  contentAnalysis.classList.remove('hidden');
+
+  if (response.error) {
+    analysisContent.innerHTML = `
+      <h3>${title}</h3>
+      <div style="color: #ef4444;">${escapeHtml(response.error)}</div>
+    `;
+    return;
+  }
+
+  analysisContent.innerHTML = `
+    <h3>${title}</h3>
+    ${formatQueryResults(response)}
+  `;
+}
+
 // Utility functions
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -660,5 +817,6 @@ window.debugPageController = {
   refreshStatistics,
   connectToOffscreen,
   currentLogs,
-  isConnected
+  isConnected,
+  handleTestSearchModes
 };

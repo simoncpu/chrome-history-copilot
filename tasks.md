@@ -30,13 +30,13 @@ Phase 2.1 — SQLite + sqlite-vec Initialization
 - [x] Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable
 
 Phase 2.2 — FTS5 Maintenance and Upserts
-- [ ] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates
-- [ ] Implement idempotent upsert by URL; update `visit_count`, `last_visit_at`
+- [x] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates
+- [x] Implement idempotent upsert by URL; update `visit_count`, `last_visit_at`
 
 Phase 2.3 — Ingestion Pipeline
-- [ ] Listen: `chrome.history.onVisited` + `chrome.tabs.onUpdated({status:'complete'})`
-- [ ] Extract page text via `chrome.scripting.executeScript`; sanitize; avoid sensitive inputs
-- [ ] Store page row; update FTS; compute/store embedding; optional summary on idle
+- [x] Listen: `chrome.history.onVisited` + `chrome.tabs.onUpdated({status:'complete'})`
+- [x] Extract page text via `chrome.scripting.executeScript`; sanitize; avoid sensitive inputs
+- [x] Store page row; update FTS; compute/store embedding; optional summary on idle
 
 Phase 3.1 — Transformers.js Setup (Embeddings)
 - [ ] Configure ONNX runtime: `env.backends.onnx.wasm.proxy=false`, `numThreads=1`, `simd=false`, `wasmPaths=chrome.runtime.getURL('lib/')`
@@ -44,56 +44,57 @@ Phase 3.1 — Transformers.js Setup (Embeddings)
 - [ ] Add model cache management; expose `clearModelCache`
 
 Phase 3.2 — Candidate Generation (Hybrid)
-- [ ] Implement FTS5 BM25 search against `pages_fts` (top K1)
-- [ ] Implement sqlite-vec cosine search against `page_embeddings` (top K2)
-- [ ] Implement RRF merge (k=60 default) into ~K candidates
+- [x] Implement FTS5 BM25 search against `pages_fts` (top K1)
+- [x] Implement sqlite-vec cosine search against `page_embeddings` (top K2)
+- [x] Implement RRF merge (k=60 default) into ~K candidates
 
 Phase 3.3 — Reranking (Stage 2)
-- [ ] Normalize BM25/cosine; compute weighted hybrid score + recency/visits boosts
+- [x] Normalize BM25/cosine; compute weighted hybrid score + recency/visits boosts
 - [ ] Optional cross-encoder reranker (Transformers.js) behind `aiPrefs.enableReranker`; fallback gracefully
-- [ ] Return top N with full metadata for UI/Chat
+- [x] Return top N with full metadata for UI/Chat
 
 Phase 3.4 — Search API Surface
-- [ ] Implement `search(query, { mode, limit })` in offscreen: modes = `hybrid-rerank` (default), `hybrid-rrf`, `text`, `vector`
-- [ ] Add `bridge/db-bridge.js` to call offscreen methods from UI
+- [x] Implement `search(query, { mode, limit })` in offscreen: modes = `hybrid-rerank` (default), `hybrid-rrf`, `text`, `vector`
+- [x] Add `bridge/db-bridge.js` to call offscreen methods from UI
 
 Phase 4.1 — Side Panel Search UI
-- [ ] Build `history_search.html`/`.js`: input + debounced query, results list, loader, error/empty states
-- [ ] Render items with favicon (`chrome://favicon`), title, URL, snippet/summary
-- [ ] “Load more” or infinite scroll; fetch next pages
+- [x] Build `history_search.html`/`.js`: input + debounced query, results list, loader, error/empty states
+- [x] Render items with favicon (`chrome://favicon`), title, URL, snippet/summary
+- [x] "Load more" or infinite scroll; fetch next pages
 
 Phase 4.2 — Advanced Options & Preferences
-- [ ] Advanced panel (slide down/out) to select mode: Hybrid+Rerank, Hybrid (RRF), Text-only, Vector-only
-- [ ] Persist `searchMode` to `chrome.storage.local`; restore on load
+- [x] Advanced panel (slide down/out) to select mode: Hybrid+Rerank, Hybrid (RRF), Text-only, Vector-only
+- [x] Persist `searchMode` to `chrome.storage.local`; restore on load
 
 Phase 4.3 — Page Toggle UX
-- [ ] Add in-panel toggle to switch between Search and Chat pages
-- [ ] Persist `lastSidePanelPage`
+- [x] Add in-panel toggle to switch between Search and Chat pages
+- [x] Persist `lastSidePanelPage`
 
 Phase 5.1 — Chat UI (Side Panel)
-- [ ] Build `history_chat.html`/`.js`: chat transcript, input, ellipsis loader, context trimming (last ~10–12 turns)
-- [ ] Toggle back to Search page seamlessly
+- [x] Build `history_chat.html`: chat transcript, input, ellipsis loader, context trimming (last ~10–12 turns)
+- [ ] Build `history_chat.js`: chat functionality implementation
+- [x] Toggle back to Search page seamlessly
 
 Phase 5.2 — Prompt API Integration
-- [ ] Create `bridge/ai-bridge.js` for `window.ai.languageModel`
-- [ ] Build context from top K search results; enforce link inclusion in system prompt
-- [ ] Handle failure with structured response fallback (top results with links)
+- [x] Create `bridge/ai-bridge.js` for `window.ai.languageModel`
+- [x] Build context from top K search results; enforce link inclusion in system prompt
+- [x] Handle failure with structured response fallback (top results with links)
 
 Phase 6.1 — Debug Page (DB Explorer)
-- [ ] Build `debug.html`/`.js` for query runner (read-only default, guarded write toggle)
-- [ ] Buttons: Clear DB, Clear Model Cache, Export DB, Import DB
+- [x] Build `debug.html`/`.js` for query runner (read-only default, guarded write toggle)
+- [x] Buttons: Clear DB, Clear Model Cache, Export DB, Import DB
 
 Phase 6.2 — Background Context Menu
-- [ ] Ensure “AI History: Debug” opens `debug.html` in new tab
+- [x] Ensure "AI History: Debug" opens `debug.html` in new tab
 - [ ] Add guardrails (confirm destructive actions)
 
 Phase 7.1 — Preferences & Resilience
-- [ ] Implement `chrome.storage.local` keys: `searchMode`, `lastSidePanelPage`, `aiPrefs { enableReranker, allowCloudModel }`
-- [ ] Offscreen lifecycle: single-instance reuse; reconnection logic; retries with backoff
+- [x] Implement `chrome.storage.local` keys: `searchMode`, `lastSidePanelPage`, `aiPrefs { enableReranker, allowCloudModel }`
+- [x] Offscreen lifecycle: single-instance reuse; reconnection logic; retries with backoff
 
 Phase 7.2 — Error Handling & Fallbacks
-- [ ] FTS5 absent → LIKE fallback; log in debug
-- [ ] sqlite-vec absent → text-only mode; log in debug
+- [x] FTS5 absent → LIKE fallback; log in debug
+- [x] sqlite-vec absent → text-only mode; log in debug
 - [ ] Embedding model load fail → text-only; retry option
 - [ ] Prompt session fail → structured response fallback
 

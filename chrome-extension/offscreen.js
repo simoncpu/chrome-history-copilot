@@ -87,6 +87,11 @@ async function handleMessage(message, sendResponse) {
         sendResponse(importResult);
         break;
 
+      // Messages intended for background: ignore to reduce noise
+      case 'capturedContent':
+        sendResponse({ ignored: true });
+        break;
+
       case 'update-summary':
         try {
           const up = await db.updateSummaryByUrl(message.data?.url, message.data?.summary);

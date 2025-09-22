@@ -8,6 +8,20 @@
 </head>
 <body>
   <div class="container">
+    <!-- Permissions Overlay (hidden by default) -->
+    <div id="permissionOverlay" class="perm-overlay hidden" role="dialog" aria-modal="true">
+      <div class="perm-card">
+        <div class="perm-title">Host Access Required</div>
+        <div class="perm-desc">
+          To extract and summarize pages automatically, the extension needs access to all sites.
+          Please grant access below, or open the extension settings to enable "Always on all sites".
+        </div>
+        <div class="perm-actions">
+          <button id="grantAllSites" class="perm-button-primary">Grant All Sites Access</button>
+          <button id="openExtSettings" class="perm-button-secondary">Open Extension Settings</button>
+        </div>
+      </div>
+    </div>
     <!-- Header -->
     <header class="header">
       <h1 class="title">AI History Search</h1>

@@ -10,6 +10,8 @@ let refreshStats, executeQuery, clearQuery, sampleQueries;
 let exportDb, importFile, clearModelCache, clearDatabase;
 let operationProgress, progressFill;
 let logContainer, clearLogs, exportLogs, autoRefreshLogs;
+// Permissions elements
+let grantAllSitesAccessBtn, grantCurrentSiteAccessBtn, checkCurrentSiteAccessBtn, openExtensionSettingsBtn;
 
 // Content analysis elements
 let analyzeRecentPages, showContentStats, testSearchModes;
@@ -125,6 +127,11 @@ function initializeDOMElements() {
   toggleEnableReranker = document.getElementById('toggleEnableReranker');
   savePrefs = document.getElementById('savePrefs');
   reloadEmbeddings = document.getElementById('reloadEmbeddings');
+  // Permissions
+  grantAllSitesAccessBtn = document.getElementById('grantAllSitesAccess');
+  grantCurrentSiteAccessBtn = document.getElementById('grantCurrentSiteAccess');
+  checkCurrentSiteAccessBtn = document.getElementById('checkCurrentSiteAccess');
+  openExtensionSettingsBtn = document.getElementById('openExtensionSettings');
 }
 
 function setupEventListeners() {
@@ -158,6 +165,11 @@ function setupEventListeners() {
   // Preferences
   if (savePrefs) savePrefs.addEventListener('click', handleSavePrefs);
   if (reloadEmbeddings) reloadEmbeddings.addEventListener('click', handleReloadEmbeddings);
+  // Permissions
+  if (grantAllSitesAccessBtn) grantAllSitesAccessBtn.addEventListener('click', handleGrantAllSitesAccess);
+  if (grantCurrentSiteAccessBtn) grantCurrentSiteAccessBtn.addEventListener('click', handleGrantCurrentSiteAccess);
+  if (checkCurrentSiteAccessBtn) checkCurrentSiteAccessBtn.addEventListener('click', handleCheckCurrentSiteAccess);
+  if (openExtensionSettingsBtn) openExtensionSettingsBtn.addEventListener('click', handleOpenExtensionSettings);
 
   // Keyboard shortcuts
   sqlQuery.addEventListener('keydown', (e) => {
@@ -166,6 +178,44 @@ function setupEventListeners() {
       handleExecuteQuery();
     }
   });
+}
+
+// Permissions handlers
+async function handleCheckCurrentSiteAccess() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.url) { log('No active tab URL found', 'warn'); return; }
+    const origin = new URL(tab.url).origin + '/*';
+    const has = await chrome.permissions.contains({ origins: [origin] });
+    log(`${has ? '✅' : '⛔️'} Host access ${has ? 'granted' : 'missing'} for ${origin}`, has ? 'info' : 'warn');
+  } catch (e) {
+    log(`Failed to check site access: ${e.message}`, 'error');
+  }
+}
+
+async function handleGrantCurrentSiteAccess() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.url) { log('No active tab URL found', 'warn'); return; }
+    const origin = new URL(tab.url).origin + '/*';
+    const granted = await chrome.permissions.request({ origins: [origin] });
+    log(granted ? `Granted host access for ${origin}` : `User denied host access for ${origin}`, granted ? 'info' : 'warn');
+  } catch (e) {
+    log(`Failed to request site access: ${e.message}`, 'error');
+  }
+}
+
+async function handleGrantAllSitesAccess() {
+  try {
+    const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
+    log(granted ? 'Granted host access for all sites' : 'User denied all-sites access', granted ? 'info' : 'warn');
+  } catch (e) {
+    log(`Failed to request all-sites access: ${e.message}`, 'error');
+  }
+}
+
+function handleOpenExtensionSettings() {
+  chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
 }
 
 async function loadPreferences() {

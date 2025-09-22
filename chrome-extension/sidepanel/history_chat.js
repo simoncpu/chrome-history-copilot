@@ -20,7 +20,7 @@ let chatHistory = [];
 let aiSession = null;
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', initializeChatPage);
+document.addEventListener('DOMContentLoaded', () => gatePermissionsThen(initializeChatPage));
 
 function initializeChatPage() {
   console.log('[CHAT] DOM loaded, initializing...');
@@ -52,6 +52,37 @@ function initializeChatPage() {
   loadChatHistory();
 
   console.log('[CHAT] Chat page initialized');
+}
+
+// Permission gating
+async function gatePermissionsThen(next) {
+  const overlay = document.getElementById('permissionOverlay');
+  const grantBtn = document.getElementById('grantAllSites');
+  const settingsBtn = document.getElementById('openExtSettings');
+
+  const hasGlobal = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
+  if (hasGlobal) {
+    overlay?.classList.add('hidden');
+    next();
+    return;
+  }
+
+  // Show overlay and wire buttons
+  overlay?.classList.remove('hidden');
+  grantBtn?.addEventListener('click', async () => {
+    try {
+      const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
+      if (granted) {
+        overlay?.classList.add('hidden');
+        next();
+      }
+    } catch (e) {
+      console.warn('[CHAT] Grant all sites failed:', e);
+    }
+  });
+  settingsBtn?.addEventListener('click', () => {
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+  });
 }
 
 function setupEventListeners() {

@@ -25,7 +25,7 @@ let hasMoreResults = false;
 let lastBatch = [];
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', initializeSearchPage);
+document.addEventListener('DOMContentLoaded', () => gatePermissionsThen(initializeSearchPage));
 
 function initializeSearchPage() {
   console.log('[SEARCH] DOM loaded, initializing...');
@@ -57,6 +57,37 @@ function initializeSearchPage() {
   setupTabNavigation();
 
   console.log('[SEARCH] Search page initialized');
+}
+
+// Permission gating
+async function gatePermissionsThen(next) {
+  const overlay = document.getElementById('permissionOverlay');
+  const grantBtn = document.getElementById('grantAllSites');
+  const settingsBtn = document.getElementById('openExtSettings');
+
+  const hasGlobal = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
+  if (hasGlobal) {
+    overlay?.classList.add('hidden');
+    next();
+    return;
+  }
+
+  // Show overlay and wire buttons
+  overlay?.classList.remove('hidden');
+  grantBtn?.addEventListener('click', async () => {
+    try {
+      const granted = await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] });
+      if (granted) {
+        overlay?.classList.add('hidden');
+        next();
+      }
+    } catch (e) {
+      console.warn('[SEARCH] Grant all sites failed:', e);
+    }
+  });
+  settingsBtn?.addEventListener('click', () => {
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+  });
 }
 
 function setupEventListeners() {

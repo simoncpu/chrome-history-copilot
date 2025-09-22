@@ -432,6 +432,17 @@ async function processIngestionQueue() {
         let extractedContent = null;
 
         console.log('[BG] tabs.query result count:', tabs.length, 'for URL:', pageInfo.url);
+        // Check host permission for this origin to clarify why extraction may fail
+        try {
+          const origin = new URL(pageInfo.url).origin + '/*';
+          const hasPerm = await chrome.permissions.contains({ origins: [origin] });
+          console.log('[BG] Host permission', hasPerm ? 'granted' : 'missing', 'for', origin);
+          if (!hasPerm) {
+            console.warn('[BG] No host permission for origin; content script and scripting extraction may be blocked unless user grants access.');
+          }
+        } catch (permErr) {
+          console.warn('[BG] Host permission check failed:', permErr?.message || permErr);
+        }
         if (tabs.length > 0) {
           try {
             extractedContent = await sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });

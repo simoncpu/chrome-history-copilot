@@ -1,6 +1,7 @@
 /**
  * AI History Chat - Chat Page Controller
  */
+import { aiBridge } from '../bridge/ai-bridge.js';
 
 console.log('[CHAT] Initializing chat page');
 
@@ -190,7 +191,8 @@ async function generateAIResponse(userMessage, searchResults) {
 
   // Try to use Chrome AI API
   try {
-    if (window.ai && window.ai.languageModel) {
+    const caps = await aiBridge.initialize();
+    if (await aiBridge.isLanguageModelAvailable()) {
       return await generateWithChromeAI(userMessage, searchResults);
     }
   } catch (error) {
@@ -202,34 +204,18 @@ async function generateAIResponse(userMessage, searchResults) {
 }
 
 async function generateWithChromeAI(userMessage, searchResults) {
-  // Create AI session if needed
+  // Ensure language session
   if (!aiSession) {
-    aiSession = await window.ai.languageModel.create({
-      systemPrompt: `You are an AI assistant that helps users find information from their browsing history. You must:
-
-1. Answer based ONLY on the provided history snippets
-2. Always include clickable links for relevant pages
-3. Keep responses concise and helpful
-4. If no relevant information is found, say so clearly
-5. Use bullet points and clear formatting
-
-Always include links in your responses when referencing pages.`
-    });
+    aiSession = await aiBridge.createLanguageSession();
   }
 
-  // Build context from search results
-  const context = buildContext(searchResults);
+  // Build context: search results + recent chat turns
+  const resultsContext = aiBridge.buildContext(searchResults, 8);
+  const turnsContext = buildChatTurnsContext(10, 2000);
+  const combinedContext = [resultsContext, turnsContext].filter(Boolean).join('\n\n');
 
-  // Generate prompt
-  const prompt = `User question: ${userMessage}
-
-${context}
-
-Please provide a helpful response based on the browsing history above. Include relevant links.`;
-
-  // Get AI response
-  const response = await aiSession.prompt(prompt);
-
+  // Generate response via bridge
+  const response = await aiBridge.generateResponse(userMessage, combinedContext);
   return response;
 }
 
@@ -273,6 +259,20 @@ function buildContext(searchResults) {
   });
 
   return context;
+}
+
+function buildChatTurnsContext(maxTurns = 10, maxChars = 2000) {
+  if (!Array.isArray(chatHistory) || chatHistory.length === 0) return '';
+  const recent = chatHistory.slice(-maxTurns);
+  let buf = 'Recent chat context (most recent last):\n\n';
+  for (const msg of recent) {
+    const role = msg.role === 'user' ? 'User' : 'Assistant';
+    const text = String(msg.content || '').replace(/\s+/g, ' ').trim();
+    const line = `${role}: ${text}\n`;
+    if ((buf.length + line.length) > maxChars) break;
+    buf += line;
+  }
+  return buf;
 }
 
 function addAssistantMessage(content, searchResults = []) {
@@ -377,15 +377,12 @@ function scrollToBottom() {
 // AI initialization
 async function initializeAI() {
   try {
-    if (window.ai && window.ai.languageModel) {
-      const capabilities = await window.ai.languageModel.capabilities();
-      console.log('[CHAT] AI capabilities:', capabilities);
-
-      if (capabilities.available === 'readily') {
-        statusText.textContent = 'AI ready';
-      } else {
-        statusText.textContent = 'AI initializing...';
-      }
+    const caps = await aiBridge.initialize();
+    console.log('[CHAT] AI capabilities:', caps);
+    if (caps?.languageModel?.available === 'readily') {
+      statusText.textContent = 'AI ready';
+    } else if (caps?.languageModel) {
+      statusText.textContent = 'AI initializing...';
     } else {
       statusText.textContent = 'AI not available - using fallback';
     }

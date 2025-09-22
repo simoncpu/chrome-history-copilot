@@ -74,6 +74,9 @@ function initializeDebugPage() {
 
   // Start auto-refresh for logs
   startLogRefresh();
+
+  // Load preferences
+  loadPreferences();
 }
 
 function initializeDOMElements() {
@@ -116,6 +119,12 @@ function initializeDOMElements() {
   testSearchModes = document.getElementById('testSearchModes');
   contentAnalysis = document.getElementById('contentAnalysis');
   analysisContent = document.getElementById('analysisContent');
+
+  // Preferences
+  toggleAllowCloudModel = document.getElementById('toggleAllowCloudModel');
+  toggleEnableReranker = document.getElementById('toggleEnableReranker');
+  savePrefs = document.getElementById('savePrefs');
+  reloadEmbeddings = document.getElementById('reloadEmbeddings');
 }
 
 function setupEventListeners() {
@@ -146,6 +155,10 @@ function setupEventListeners() {
   showContentStats.addEventListener('click', handleShowContentStats);
   testSearchModes.addEventListener('click', handleTestSearchModes);
 
+  // Preferences
+  if (savePrefs) savePrefs.addEventListener('click', handleSavePrefs);
+  if (reloadEmbeddings) reloadEmbeddings.addEventListener('click', handleReloadEmbeddings);
+
   // Keyboard shortcuts
   sqlQuery.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -153,6 +166,44 @@ function setupEventListeners() {
       handleExecuteQuery();
     }
   });
+}
+
+async function loadPreferences() {
+  try {
+    const store = await chrome.storage.local.get(['aiPrefs']);
+    const prefs = store.aiPrefs || { allowCloudModel: true, enableReranker: false };
+    if (toggleAllowCloudModel) toggleAllowCloudModel.checked = prefs.allowCloudModel !== false;
+    if (toggleEnableReranker) toggleEnableReranker.checked = !!prefs.enableReranker;
+  } catch (e) {
+    log('Failed to load preferences', 'warn');
+  }
+}
+
+async function handleSavePrefs() {
+  const prefs = {
+    allowCloudModel: toggleAllowCloudModel ? toggleAllowCloudModel.checked : true,
+    enableReranker: toggleEnableReranker ? toggleEnableReranker.checked : false
+  };
+  try {
+    await chrome.storage.local.set({ aiPrefs: prefs });
+    log('Preferences saved', 'info');
+    await chrome.runtime.sendMessage({ type: 'refresh-ai-prefs' });
+  } catch (e) {
+    log(`Failed to save preferences: ${e.message}`, 'error');
+  }
+}
+
+async function handleReloadEmbeddings() {
+  try {
+    showProgress();
+    const resp = await chrome.runtime.sendMessage({ type: 'reload-embeddings' });
+    if (resp?.error) throw new Error(resp.error);
+    log('Embeddings reloaded', 'info');
+  } catch (e) {
+    log(`Failed to reload embeddings: ${e.message}`, 'error');
+  } finally {
+    hideProgress();
+  }
 }
 
 // Connection management

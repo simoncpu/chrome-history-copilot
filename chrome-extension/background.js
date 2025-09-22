@@ -95,6 +95,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Async response
   }
 
+  // Handle captured summary updates (from content script)
+  if (message.type === 'capturedSummary') {
+    (async () => {
+      try {
+        await ensureOffscreenDocument();
+        const resp = await chrome.runtime.sendMessage({
+          type: 'update-summary',
+          data: message.payload
+        });
+        sendResponse(resp);
+      } catch (e) {
+        console.warn('[BG] Failed to forward captured summary:', e);
+        sendResponse({ error: e.message });
+      }
+    })();
+    return true;
+  }
+
   // Route messages to offscreen document
   if (message.target === 'offscreen') {
     ensureOffscreenDocument().then(() => {
@@ -106,7 +124,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Define messages that should be forwarded to offscreen document
   const offscreenMessages = [
     'ingest-page', 'search', 'embed', 'clear-db', 'get-stats',
-    'execute-sql', 'clear-model-cache', 'export-db', 'import-db'
+    'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary'
   ];
 
   if (offscreenMessages.includes(message.type)) {
@@ -209,8 +227,14 @@ async function extractPageContent(url, sendResponse) {
       const response = await sendMessageWithRetry(tab.id, { type: 'getPageContent' });
       sendResponse(response);
     } catch (e) {
-      console.error('[BG] Failed to extract content:', e.message);
-      sendResponse({ error: e.message });
+      console.warn('[BG] Content script extraction failed, falling back to scripting:', e.message);
+      try {
+        const fallback = await extractViaScripting(tab);
+        sendResponse(fallback);
+      } catch (e2) {
+        console.error('[BG] Fallback extraction failed:', e2.message);
+        sendResponse({ error: e2.message });
+      }
     }
 
   } catch (error) {
@@ -246,7 +270,11 @@ async function sendMessageWithRetry(tabId, message, attempts = 3, delayMs = 300)
 // Handle captured content from content scripts
 async function handleCapturedContent(payload, sendResponse) {
   try {
-    console.log('[BG] Captured content for:', payload.url);
+    console.log('[BG] Captured content for:', payload.url, {
+      textLen: (payload.text || '').length,
+      hadSummary: !!payload.summary,
+      summaryLen: payload.summary ? payload.summary.length : 0
+    });
 
     const key = 'capturedContentByUrl';
     const store = await chrome.storage.local.get(key);
@@ -279,12 +307,24 @@ async function handleCapturedContent(payload, sendResponse) {
       chrome.runtime.sendMessage({
         type: 'ingest-captured-payload',
         data: payload
-      }, () => void chrome.runtime.lastError);
+      }).then((resp) => {
+        if (resp?.error) {
+          console.warn('[BG] Offscreen direct ingest error:', resp.error);
+        } else {
+          console.log('[BG] Offscreen direct ingest response:', resp?.status || resp);
+        }
+      }).catch(() => void chrome.runtime.lastError);
 
       // Also send generic ingest signal for any queued items
       chrome.runtime.sendMessage({
         type: 'ingest-captured-queue'
-      }, () => void chrome.runtime.lastError);
+      }).then((resp) => {
+        if (resp?.error) {
+          console.warn('[BG] Offscreen queue ingest error:', resp.error);
+        } else {
+          console.log('[BG] Offscreen queue ingest response:', resp?.status || resp);
+        }
+      }).catch(() => void chrome.runtime.lastError);
 
     } catch (e) {
       console.warn('[BG] Offscreen ingestion not available:', e);
@@ -381,23 +421,50 @@ async function processIngestionQueue() {
   try {
     await ensureOffscreenDocument();
 
+    console.log('[BG] Processing ingestion queue. Count:', ingestionQueue.length);
     while (ingestionQueue.length > 0) {
       const pageInfo = ingestionQueue.shift();
+      console.log('[BG] Ingesting page from queue:', pageInfo.url);
 
       try {
         // Try to extract real content if possible
         const tabs = await chrome.tabs.query({ url: pageInfo.url });
         let extractedContent = null;
 
+        console.log('[BG] tabs.query result count:', tabs.length, 'for URL:', pageInfo.url);
         if (tabs.length > 0) {
           try {
             extractedContent = await sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });
+            if (extractedContent && !extractedContent.error) {
+              console.log('[BG] Content script extracted:', {
+                url: pageInfo.url,
+                title: extractedContent.title,
+                textLen: (extractedContent.text || '').length
+              });
+            }
           } catch (e) {
-            console.warn('[BG] Failed to extract content for:', pageInfo.url, e.message);
+            console.warn('[BG] Failed to extract via content script, trying scripting for:', pageInfo.url, e.message);
+            try {
+              extractedContent = await extractViaScripting(tabs[0]);
+              if (extractedContent && !extractedContent.error) {
+                console.log('[BG] Scripting extracted:', {
+                  url: pageInfo.url,
+                  title: extractedContent.title,
+                  textLen: (extractedContent.text || '').length
+                });
+              }
+            } catch (e2) {
+              console.warn('[BG] Fallback scripting extraction failed:', e2.message);
+            }
           }
         }
 
         // Send to offscreen for processing
+        console.log('[BG] Sending ingest-page to offscreen:', {
+          url: pageInfo.url,
+          hasExtracted: !!extractedContent,
+          extractedLen: extractedContent ? (extractedContent.text || '').length : 0
+        });
         const response = await chrome.runtime.sendMessage({
           target: 'offscreen',
           type: 'ingest-page',
@@ -407,6 +474,7 @@ async function processIngestionQueue() {
           }
         });
 
+        console.log('[BG] Offscreen ingest response:', response);
         if (response?.error) {
           console.error('[BG] Ingestion failed:', response.error);
         } else {
@@ -419,4 +487,27 @@ async function processIngestionQueue() {
   } finally {
     isProcessingQueue = false;
   }
+}
+
+// Fallback extractor using chrome.scripting.executeScript
+async function extractViaScripting(tab) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    func: () => {
+      const pick = () => document.querySelector('main, article, [role="main"], #main, .main, .content, #content') || document.body || document.documentElement;
+      const root = pick();
+      let text = root ? (root.innerText || '') : '';
+      text = (text || '').replace(/\s+/g, ' ').trim();
+      const MAX = 200000;
+      if (text.length > MAX) text = text.slice(0, MAX) + '...';
+      return {
+        url: location.href,
+        title: document.title || '',
+        text,
+        domain: location.hostname,
+        timestamp: Date.now()
+      };
+    }
+  });
+  return result;
 }

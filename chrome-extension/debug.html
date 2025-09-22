@@ -342,6 +342,27 @@
       </div>
     </div>
 
+    <!-- Preferences -->
+    <div class="section">
+      <h2 class="section-title">Preferences</h2>
+      <div class="grid">
+        <div>
+          <div class="checkbox-container">
+            <input type="checkbox" id="toggleAllowCloudModel" class="checkbox">
+            <label for="toggleAllowCloudModel">Allow model downloads (Hugging Face/CDN)</label>
+          </div>
+          <div class="checkbox-container">
+            <input type="checkbox" id="toggleEnableReranker" class="checkbox">
+            <label for="toggleEnableReranker">Enable cross-encoder reranker (if available)</label>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+            <button id="savePrefs" class="button button-primary">Save Preferences</button>
+            <button id="reloadEmbeddings" class="button button-secondary">Reload Embeddings</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Database Explorer -->
     <div class="section">
       <h2 class="section-title">Database Explorer</h2>

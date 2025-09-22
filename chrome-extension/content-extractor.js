@@ -34,7 +34,7 @@
       if (text.length > MAX_CHARS) {
         text = text.slice(0, MAX_CHARS) + '...';
       }
-
+      console.log('[CONTENT-EXTRACTOR] Extracted text length:', text.length, 'url:', location.href);
       return text;
     } catch (e) {
       console.warn('[CONTENT-EXTRACTOR] Failed to extract text:', e);
@@ -49,47 +49,53 @@
     try {
       if (typeof window === 'undefined' || !window.ai?.summarizer) return null;
 
-      // Attempt creation; may fail if user activation is required
-      let summarizer;
+      // If readily available, we can summarize without explicit gesture
       try {
-        summarizer = await window.ai.summarizer.create({
-          type: 'key-points',
-          length: 'medium',
-          format: 'plain-text',
-          language: 'en',
-          outputLanguage: 'en'
-        });
-      } catch (e) {
-        console.warn('[CONTENT-EXTRACTOR] Failed to create summarizer:', e);
-        return null;
+        const caps = await window.ai.summarizer.capabilities();
+        console.log('[CONTENT-EXTRACTOR] Summarizer capabilities:', caps);
+        if (caps?.available !== 'readily') {
+          // Not readily available (likely needs user activation)
+          console.log('[CONTENT-EXTRACTOR] Summarizer not readily available; skipping summarize');
+          return null;
+        }
+      } catch (_) {
+        // Capabilities may be unsupported; continue best-effort
       }
+
+      const summarizer = await window.ai.summarizer.create({
+        type: 'key-points',
+        length: 'medium',
+        format: 'plain-text',
+        language: 'en',
+        outputLanguage: 'en'
+      });
 
       try {
         // Limit input size for summarizer
         const MAX = 32000;
         const input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
 
+        console.log('[CONTENT-EXTRACTOR] Summarizing content; inputLen:', input.length);
         const summary = await summarizer.summarize(input, {
           context: `Web page titled "${document.title || ''}" from ${location.hostname}`,
           language: 'en',
           outputLanguage: 'en'
         });
-
-        return typeof summary === 'string' ? summary : null;
-      } finally {
-        try {
-          if (summarizer && summarizer.destroy) {
-            summarizer.destroy();
-          }
-        } catch (e) {
-          console.warn('[CONTENT-EXTRACTOR] Failed to destroy summarizer:', e);
+        if (typeof summary === 'string') {
+          console.log('[CONTENT-EXTRACTOR] Summary generated length:', summary.length);
+          return summary;
         }
+        return null;
+      } finally {
+        try { summarizer?.destroy?.(); } catch (e) { /* noop */ }
       }
     } catch (e) {
       console.warn('[CONTENT-EXTRACTOR] Summarization failed:', e);
       return null;
     }
   }
+
+  // (Deferred gesture path removed; offscreen handles summarization)
 
   /**
    * Handle messages from background script
@@ -142,6 +148,12 @@
           };
 
           // Send captured content to background for storage
+          console.log('[CONTENT-EXTRACTOR] Sending capturedContent:', {
+            url: payload.url,
+            textLen: payload.text.length,
+            hadSummary: !!payload.summary,
+            summaryLen: payload.summary ? payload.summary.length : 0
+          });
           chrome.runtime.sendMessage({
             type: 'capturedContent',
             payload
@@ -149,6 +161,8 @@
             // Ignore errors (background might not be available)
             void chrome.runtime.lastError;
           });
+
+          // Offscreen will attempt summarization if none
 
         } catch (e) {
           console.error('[CONTENT-EXTRACTOR] Auto-capture failed:', e);

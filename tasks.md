@@ -75,20 +75,19 @@ Phase 5.1 — Chat UI (Side Panel)
 - [x] Build `history_chat.html`: chat transcript, input, ellipsis loader, context trimming (last ~10–12 turns)
 - [x] Build `history_chat.js`: chat functionality implementation
 - [x] Toggle back to Search page seamlessly
-- [ ] Include recent chat turns in AI prompt; trim to last 10–12 turns
+ - [x] Include recent chat turns in AI prompt; trim to last 10–12 turns
 
 Phase 5.2 — Prompt API Integration
 - [x] Create `bridge/ai-bridge.js` for `window.ai.languageModel`
 - [x] Build context from top K search results; enforce link inclusion in system prompt
 - [x] Handle failure with structured response fallback (top results with links)
- - [ ] Adopt `ai-bridge.js` in Chat UI for session + prompts
+ - [x] Adopt `ai-bridge.js` in Chat UI for session + prompts
 
 Phase 6.1 — Debug Page (DB Explorer)
 - [x] Build `debug.html`/`.js` for query runner (read-only default, guarded write toggle)
 - [x] Buttons: Clear DB, Clear Model Cache, Export DB, Import DB
-  - [ ] Implement full SQLite export (downloadable `.db`)
-  - [ ] Implement SQLite import that restores DB state
-  - [ ] Expose DB size in `get-stats` for display
+  - [ ] Optional: Expose DB size in `get-stats` for display
+  - [x] Preferences toggles: `allowCloudModel`, `enableReranker`; reload embeddings
 
 Phase 6.2 — Background Context Menu
 - [x] Ensure "AI History: Debug" opens `debug.html` in new tab
@@ -96,13 +95,13 @@ Phase 6.2 — Background Context Menu
 
 Phase 7.1 — Preferences & Resilience
 - [x] Implement `searchMode`, `lastSidePanelPage` storage in `chrome.storage.local`
-- [ ] Add `aiPrefs { enableReranker, allowCloudModel }` storage + wire-up
+ - [x] Add `aiPrefs { enableReranker, allowCloudModel }` storage + wire-up
 - [x] Offscreen lifecycle: single-instance reuse; reconnection logic; retries with backoff
 
 Phase 7.2 — Error Handling & Fallbacks
 - [x] FTS5 absent → LIKE fallback; log in debug
 - [x] sqlite-vec absent → text-only mode; log in debug
-- [ ] Embedding model load fail → text-only; retry option
+ - [x] Embedding model load fail → text-only; retry option
 - [x] Prompt session fail → structured response fallback
 
 Phase 8.1 — Manual QA

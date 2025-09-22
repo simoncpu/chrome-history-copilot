@@ -10,6 +10,7 @@ let db = null;
 let embedModel = null;
 let embedder = null; // Transformers.js pipeline
 let isInitialized = false;
+let aiPrefs = { enableReranker: false, allowCloudModel: true };
 
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -86,8 +87,32 @@ async function handleMessage(message, sendResponse) {
         sendResponse(importResult);
         break;
 
+      case 'update-summary':
+        try {
+          const up = await db.updateSummaryByUrl(message.data?.url, message.data?.summary);
+          sendResponse(up);
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
+        break;
+
       case 'ping':
         sendResponse({ status: 'ok', initialized: isInitialized });
+        break;
+
+      case 'refresh-ai-prefs':
+        await refreshAiPrefs();
+        sendResponse({ status: 'ok', aiPrefs });
+        break;
+
+      case 'reload-embeddings':
+        try {
+          await refreshAiPrefs();
+          await initializeEmbeddings();
+          sendResponse({ status: 'reloaded' });
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
         break;
 
       default:
@@ -109,6 +134,9 @@ async function initialize() {
     // Initialize SQLite database
     await initializeDatabase();
 
+    // Load AI preferences from storage
+    await refreshAiPrefs();
+
     // Initialize embedding model
     await initializeEmbeddings();
 
@@ -117,6 +145,20 @@ async function initialize() {
   } catch (error) {
     console.error('[OFFSCREEN] Initialization failed:', error);
     throw error;
+  }
+}
+
+async function refreshAiPrefs() {
+  try {
+    const stored = await chrome.storage.local.get(['aiPrefs']);
+    if (stored && stored.aiPrefs && typeof stored.aiPrefs === 'object') {
+      aiPrefs = {
+        enableReranker: !!stored.aiPrefs.enableReranker,
+        allowCloudModel: stored.aiPrefs.allowCloudModel !== false
+      };
+    }
+  } catch (e) {
+    console.warn('[OFFSCREEN] Failed to load aiPrefs; using defaults');
   }
 }
 
@@ -180,6 +222,27 @@ class DatabaseWrapper {
     this.sqlite3 = sqlite3;
     this.initialized = true;
     this._vecSupport = null; // Cache vec support detection
+  }
+
+  updateSummaryByUrl(url, summary) {
+    if (!url) return { error: 'Missing URL' };
+    const sel = this.db.prepare('SELECT id FROM pages WHERE url = ? LIMIT 1');
+    sel.bind([url]);
+    let id = null;
+    if (sel.step()) {
+      id = sel.get(0);
+    }
+    sel.finalize();
+    if (!id) return { success: false, updated: 0 };
+
+    const isString = typeof summary === 'string';
+    const normalized = isString ? summary : null;
+    console.log('[DB] updateSummaryByUrl:', { url, id, summaryType: typeof summary, len: isString ? summary.length : 0 });
+    const upd = this.db.prepare('UPDATE pages SET summary = ? WHERE id = ?');
+    upd.bind([normalized, id]);
+    upd.step();
+    upd.finalize();
+    return { success: true, updated: 1, id };
   }
 
   async initializeSchema() {
@@ -311,11 +374,13 @@ class DatabaseWrapper {
         `);
         try {
           const newVisit = existingVisitCount + 1;
+          // vec0 expects TEXT metadata columns to be TEXT, not NULL
+          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : '';
           upd.bind([
             pageData.domain || '',
             pageData.title || '',
             pageData.content_text || '',
-            pageData.summary || '',
+            normalizedSummary,
             pageData.favicon_url || '',
             pageData.last_visit_at,
             newVisit,
@@ -351,12 +416,14 @@ class DatabaseWrapper {
         `);
 
         try {
+          // vec0 expects TEXT, not NULL, for metadata columns like summary
+          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : '';
           stmt.bind([
             pageData.url || '',
             pageData.domain || '',
             pageData.title || '',
             pageData.content_text || '',
-            pageData.summary || '',
+            normalizedSummary,
             pageData.favicon_url || '',
             pageData.first_visit_at,
             pageData.last_visit_at,
@@ -412,11 +479,18 @@ class DatabaseWrapper {
                 last_visit_at = ?, visit_count = ?
             WHERE id = ?
           `);
+          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
+          console.log('[DB] Fallback UPDATE pages:', {
+            id: existingId,
+            url: pageData.url,
+            hasSummary: typeof pageData.summary === 'string',
+            summaryLen: typeof pageData.summary === 'string' ? pageData.summary.length : 0
+          });
           upd.bind([
             pageData.domain,
             pageData.title,
             pageData.content_text,
-            pageData.summary || null,
+            normalizedSummary,
             pageData.favicon_url || null,
             Math.max(existingLastVisit || 0, pageData.last_visit_at || 0),
             newVisit,
@@ -462,12 +536,18 @@ class DatabaseWrapper {
             (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
+          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
+          console.log('[DB] Fallback INSERT pages:', {
+            url: pageData.url,
+            hasSummary: typeof pageData.summary === 'string',
+            summaryLen: typeof pageData.summary === 'string' ? pageData.summary.length : 0
+          });
           stmt.bind([
             pageData.url,
             pageData.domain,
             pageData.title,
             pageData.content_text,
-            pageData.summary || null,
+            normalizedSummary,
             pageData.favicon_url || null,
             pageData.first_visit_at,
             pageData.last_visit_at,
@@ -555,7 +635,29 @@ class DatabaseWrapper {
 
       return results;
     } catch (ftsError) {
-      console.warn('[DB] FTS5 search failed, using LIKE fallback:', ftsError);
+      console.warn('[DB] FTS5 bm25() not available, trying rank-based search:', ftsError?.message || ftsError);
+
+      // Try rank-based ordering as a secondary fallback
+      try {
+        const stmt2 = this.db.prepare(`
+          SELECT p.*, rank AS bm25_score,
+                 snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
+          FROM pages_fts
+          JOIN pages p ON p.id = pages_fts.id
+          WHERE pages_fts MATCH ?
+          ORDER BY rank
+          LIMIT ? OFFSET ?
+        `);
+        const results2 = [];
+        stmt2.bind([query, limit, offset]);
+        while (stmt2.step()) {
+          results2.push(this.rowToObject(stmt2));
+        }
+        stmt2.finalize();
+        return results2;
+      } catch (rankError) {
+        console.warn('[DB] FTS5 rank-based search failed, using LIKE fallback:', rankError?.message || rankError);
+      }
 
       // Fallback to LIKE search
       const likeQuery = `%${query.toLowerCase()}%`;
@@ -854,7 +956,7 @@ async function initializeEmbeddings() {
       env.allowLocalModels = false;
     }
     if (typeof env.allowRemoteModels !== 'undefined') {
-      env.allowRemoteModels = true;
+      env.allowRemoteModels = !!aiPrefs.allowCloudModel;
     }
 
     const { pipeline } = mod;
@@ -908,16 +1010,40 @@ async function ingestPage(pageInfo) {
       summary: null
     };
 
+    // Log extraction status
+    console.log('[OFFSCREEN] ingestPage extracted:', {
+      url: pageInfo.url,
+      title: content.title,
+      textLen: (content.text || '').length,
+      hadSummary: !!content.summary
+    });
+    // If we don't have a summary yet, try to generate one offscreen (no user interaction)
+    let summary = content.summary;
+    if (!summary) {
+      summary = await trySummarizeOffscreen(content.text, pageInfo.url, content.title);
+    }
+    if (!summary) {
+      summary = buildFallbackSummary(content.text, content.title, pageInfo.url);
+    }
+
     // Generate embedding for content (always create one for sqlite-vec compatibility)
     const textToEmbed = content.title + ' ' + content.text;
     const embedding = textToEmbed.trim().length > 0 ? await embed(textToEmbed) : await embed('webpage');
 
+    // Ensure summary is a string for vec0 metadata
+    if (summary == null) summary = '';
+
     // Store in database
+    console.log('[OFFSCREEN] Storing page:', {
+      url: pageInfo.url,
+      summaryLen: typeof summary === 'string' ? summary.length : 0,
+      embedDim: embedding?.length || 0
+    });
     const pageId = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
       content_text: content.text,
-      summary: content.summary,
+      summary: summary,
       domain: new URL(pageInfo.url).hostname,
       first_visit_at: pageInfo.visitTime || Date.now(),
       last_visit_at: pageInfo.visitTime || Date.now(),
@@ -925,6 +1051,7 @@ async function ingestPage(pageInfo) {
       embedding: embedding
     });
 
+    console.log('[OFFSCREEN] Ingested page stored with id:', pageId.id);
     return { status: 'success', pageId: pageId.id };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest page:', error);
@@ -937,16 +1064,35 @@ async function ingestCapturedContent(capturedData) {
   console.log('[OFFSCREEN] Ingesting captured content:', capturedData.url);
 
   try {
+    // Generate summary if missing
+    let summary = capturedData.summary;
+    if (!summary) {
+      summary = await trySummarizeOffscreen(capturedData.text || '', capturedData.url, capturedData.title);
+    }
+    if (!summary) {
+      summary = buildFallbackSummary(capturedData.text || '', capturedData.title || '', capturedData.url);
+    }
+
     // Generate embedding
-    const textToEmbed = capturedData.title + ' ' + capturedData.text;
+    const textToEmbed = (capturedData.title || '') + ' ' + (capturedData.text || '');
     const embedding = await embed(textToEmbed);
 
+    // Ensure summary is a string for vec0 metadata
+    if (summary == null) summary = '';
+
     // Store in database
+    console.log('[OFFSCREEN] Storing captured:', {
+      url: capturedData.url,
+      textLen: (capturedData.text || '').length,
+      hadIncomingSummary: typeof capturedData.summary === 'string',
+      finalSummaryLen: typeof summary === 'string' ? summary.length : 0,
+      embedDim: embedding?.length || 0
+    });
     const pageId = await db.insert('pages', {
       url: capturedData.url,
       title: capturedData.title,
       content_text: capturedData.text,
-      summary: capturedData.summary,
+      summary: summary,
       domain: capturedData.domain,
       first_visit_at: capturedData.timestamp || Date.now(),
       last_visit_at: capturedData.timestamp || Date.now(),
@@ -959,6 +1105,122 @@ async function ingestCapturedContent(capturedData) {
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest captured content:', error);
     return { error: error.message };
+  }
+}
+
+// Offscreen summarization (best-effort, no user gesture required)
+async function trySummarizeOffscreen(text, url, title) {
+  try {
+    // Avoid trivial inputs
+    if (!text || text.trim().length < 100) return null;
+
+    // Prefer new API
+    if (globalThis?.ai?.summarizer) {
+      try {
+        const caps = await globalThis.ai.summarizer.capabilities();
+        console.log('[OFFSCREEN] Summarizer capabilities:', caps);
+        if (caps?.available !== 'readily') {
+          console.log('[OFFSCREEN] Summarizer not readily available (needs gesture); skipping offscreen summarize');
+          return null;
+        }
+      } catch (_) {
+        // capabilities may not exist on some builds; proceed guarded
+      }
+
+      const s = await globalThis.ai.summarizer.create({
+        type: 'key-points',
+        length: 'medium',
+        format: 'plain-text',
+        language: 'en',
+        outputLanguage: 'en'
+      });
+      try {
+        const MAX = 8000;
+        let input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
+        try {
+          console.log('[OFFSCREEN] Summarizing via ai.summarizer; inputLen:', input.length);
+          const summary = await s.summarize(input, {
+            context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
+            language: 'en',
+            outputLanguage: 'en'
+          });
+          if (typeof summary === 'string' && summary.trim()) {
+            console.log('[OFFSCREEN] Summarizer produced summaryLen:', summary.length);
+            return summary;
+          }
+        } catch (e) {
+          if ((e?.name === 'QuotaExceededError' || /too\s+large/i.test(e?.message)) && input.length > 4000) {
+            input = text.slice(0, 4000) + '...';
+            console.log('[OFFSCREEN] Retrying summarize with smaller inputLen:', input.length);
+            const summary = await s.summarize(input, {
+              context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
+              language: 'en',
+              outputLanguage: 'en'
+            });
+            if (typeof summary === 'string' && summary.trim()) {
+              console.log('[OFFSCREEN] Summarizer produced (retry) summaryLen:', summary.length);
+              return summary;
+            }
+          }
+        }
+      } finally {
+        try { await s?.destroy?.(); } catch {}
+      }
+    }
+
+    // Legacy API fallback (as in prototype)
+    if (globalThis?.Summarizer) {
+      try {
+        const summarizer = await globalThis.Summarizer.create({
+          type: 'key-points', length: 'medium', format: 'plain-text', language: 'en', outputLanguage: 'en'
+        });
+        try {
+          const MAX = 8000;
+          const input = text.length > MAX ? text.slice(0, MAX) + '...' : text;
+          console.log('[OFFSCREEN] Summarizing via legacy Summarizer; inputLen:', input.length);
+          const summary = await summarizer.summarize(input, {
+            context: `Web page titled "${title || ''}" from ${safeHost(url)}`,
+            language: 'en', outputLanguage: 'en'
+          });
+          if (typeof summary === 'string' && summary.trim()) {
+            console.log('[OFFSCREEN] Legacy summarizer produced summaryLen:', summary.length);
+            return summary;
+          }
+        } finally {
+          try { summarizer?.destroy?.(); } catch {}
+        }
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('[OFFSCREEN] trySummarizeOffscreen failed:', e?.message || e);
+    // ignore errors; return null
+  }
+  return null;
+}
+
+function safeHost(u) {
+  try { return new URL(u).hostname; } catch { return ''; }
+}
+
+function buildFallbackSummary(text, title = '', url = '') {
+  try {
+    const host = safeHost(url);
+    if (text && typeof text === 'string' && text.trim().length > 0) {
+      // Take first ~3 sentences or ~300 chars, whichever comes first
+      const cleaned = text.replace(/\s+/g, ' ').trim();
+      const sentences = cleaned.split(/(?<=[.!?])\s+/).slice(0, 3).join(' ');
+      let snippet = (sentences && sentences.trim().length > 0) ? sentences : cleaned.slice(0, 300);
+      if (snippet.length > 400) snippet = snippet.slice(0, 400) + '…';
+      return snippet;
+    }
+    // Fall back to a structured summary using title/host
+    const t = (title || '').trim();
+    if (t) return t;
+    if (host) return `Visited ${host}`;
+    if (url) return url;
+    return '';
+  } catch {
+    return null;
   }
 }
 
@@ -1022,12 +1284,23 @@ async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 })
   console.log('[OFFSCREEN] Searching:', query, 'mode:', mode);
 
   try {
-    // Generate query embedding
-    const queryEmbedding = await embed(query);
+    let queryEmbedding = null;
+    let effectiveMode = mode;
 
-    // Perform search based on mode
+    try {
+      queryEmbedding = await embed(query);
+    } catch (e) {
+      console.warn('[OFFSCREEN] Embedding unavailable, falling back to text-only search');
+      effectiveMode = 'text';
+    }
+
+    // If vector modes requested but we don't have embeddings, force text
+    if ((mode === 'vector' || mode === 'hybrid-rrf' || mode === 'hybrid-rerank') && !queryEmbedding) {
+      effectiveMode = 'text';
+    }
+
     const results = await db.search(query, {
-      mode,
+      mode: effectiveMode,
       limit,
       offset,
       queryEmbedding

@@ -580,10 +580,16 @@ class DatabaseWrapper {
       // If no column names provided, try to get them from the statement
       try {
         const obj = {};
-        const colCount = stmt.getColumnCount();
-        for (let i = 0; i < colCount; i++) {
-          const name = stmt.getColumnName(i);
-          obj[name] = stmt.get(i);
+        const names = typeof stmt.getColumnNames === 'function'
+          ? stmt.getColumnNames([])
+          : (() => {
+              const n = (typeof stmt.columnCount === 'number') ? stmt.columnCount : 0;
+              const arr = [];
+              for (let i = 0; i < n; i++) arr.push(stmt.getColumnName(i));
+              return arr;
+            })();
+        for (let i = 0; i < names.length; i++) {
+          obj[names[i]] = stmt.get(i);
         }
         return obj;
       } catch (error) {

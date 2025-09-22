@@ -1,28 +1,28 @@
 # ai-history3 — Tasks Roadmap
 
-This roadmap is self-contained for work inside ai-history3/. Reference: CLAUDE.md, technical_challenges_sqlite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, constitution.md.
+This roadmap is self-contained for work inside ai-history3/. Reference: CLAUDE.md, technical_challenges_sqlite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, guideline_ui.md, constitution.md.
 
 Phase 1.1 — Scaffold Extension Skeleton
-- [ ] Create folders under `chrome-extension/`: `sidepanel/`, `bridge/`, `db/` (optional docs), `lib/` (already populated), `icons/` (present)
-- [ ] Add placeholders: `sidepanel/history_search.html`, `sidepanel/history_chat.html`, `debug.html`, `offscreen.html`
-- [ ] Add scripts: `background.js`, `offscreen.js`, `sidepanel/history_search.js`, `sidepanel/history_chat.js`, `debug.js`, `bridge/db-bridge.js`, `bridge/ai-bridge.js`
-- [ ] Ensure all imports reference local `lib/` assets
+- [x] Create folders under `chrome-extension/`: `sidepanel/`, `bridge/`, `db/` (optional docs), `lib/` (already populated), `icons/` (present)
+- [x] Add placeholders: `sidepanel/history_search.html`, `sidepanel/history_chat.html`, `debug.html`, `offscreen.html`
+- [x] Add scripts: `background.js`, `offscreen.js`, `sidepanel/history_search.js`, `sidepanel/history_chat.js`, `debug.js`, `bridge/db-bridge.js`, `bridge/ai-bridge.js`
+- [x] Ensure all imports reference local `lib/` assets
 
 Phase 1.2 — Manifest.json & CSP
-- [ ] Create `chrome-extension/manifest.json` (MV3) with: `background.service_worker`, `side_panel.default_path`, `action`, `icons`, `permissions`, `host_permissions`, `web_accessible_resources`
-- [ ] Add icons mapping: `{ "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }` and set `action.default_icon`
-- [ ] Add `web_accessible_resources` for `lib/*.wasm`, `lib/transformers.min.js`, `lib/sqlite3.mjs`
-- [ ] Set CSP: `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://cdn.jsdelivr.net;`
+- [x] Create `chrome-extension/manifest.json` (MV3) with: `background.service_worker`, `side_panel.default_path`, `action`, `icons`, `permissions`, `host_permissions`, `web_accessible_resources`
+- [x] Add icons mapping: `{ "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }` and set `action.default_icon`
+- [x] Add `web_accessible_resources` for `lib/*.wasm`, `lib/transformers.min.js`, `lib/sqlite3.mjs`
+- [x] Set CSP: `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://cdn.jsdelivr.net;`
 
 Phase 1.3 — Background + Side Panel Wiring
-- [ ] Register side panel default path = `sidepanel/history_search.html`
-- [ ] Add context menu: “AI History: Debug” → opens `debug.html`
-- [ ] Offscreen orchestration: create/reuse `offscreen.html` on demand; message routing setup
+- [x] Register side panel default path = `sidepanel/history_search.html`
+- [x] Add context menu: "AI History: Debug" → opens `debug.html`
+- [x] Offscreen orchestration: create/reuse `offscreen.html` on demand; message routing setup
 
 Phase 1.4 — Offscreen Bootstrap & RPC Bridge
-- [ ] Implement `offscreen.html` (minimal) and `offscreen.js` (single entrypoint)
-- [ ] Implement message router: typed requests with IDs, promises for responses
-- [ ] Expose handlers: `initDb`, `ingestPage`, `search`, `embed`, `summarize`, `clearDb`, `clearModelCache`, `exportDb`, `importDb`
+- [x] Implement `offscreen.html` (minimal) and `offscreen.js` (single entrypoint)
+- [x] Implement message router: typed requests with IDs, promises for responses
+- [x] Expose handlers: `initDb`, `ingestPage`, `search`, `embed`, `summarize`, `clearDb`, `clearModelCache`, `exportDb`, `importDb`
 
 Phase 2.1 — SQLite + sqlite-vec Initialization
 - [ ] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, install OPFS VFS, open `opfs:/ai-history.db`

@@ -17,6 +17,10 @@ Audience: Engineers building the Chrome extension described here and agents edit
 
 See also: technical_challenges_sqlite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, constitution.md.
 
+## Tech Stack
+- sqlite-vec-wasm-demo, which can be found as an NPM package
+- Transformers.js
+- Chrome AI APIs, which are available in Chrome Canary
 
 ## High‑Level Architecture
 

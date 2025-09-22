@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI History Chat</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="title">AI History Chat</h1>
+      <div class="nav-tabs">
+        <button class="tab-button" data-page="search">Search</button>
+        <button class="tab-button active" data-page="chat">Chat</button>
+      </div>
+    </header>
+
+    <!-- Chat Interface -->
+    <main class="main-content chat-layout">
+      <!-- Chat Messages -->
+      <div class="chat-container">
+        <div id="chatMessages" class="chat-messages">
+          <!-- Welcome Message -->
+          <div class="message assistant-message">
+            <div class="message-avatar">🤖</div>
+            <div class="message-content">
+              <div class="message-text">
+                <p>Hi! I can help you find information from your browsing history. Ask me anything about pages you've visited!</p>
+                <p class="message-examples">
+                  <strong>Try asking:</strong><br>
+                  • "What articles did I read about AI last week?"<br>
+                  • "Find that recipe I looked at yesterday"<br>
+                  • "Show me documentation I visited for React"
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="chatLoading" class="chat-loading hidden">
+          <div class="message assistant-message">
+            <div class="message-avatar">🤖</div>
+            <div class="message-content">
+              <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Input -->
+      <div class="chat-input-section">
+        <form id="chatForm" class="chat-form">
+          <div class="chat-input-container">
+            <textarea
+              id="chatInput"
+              class="chat-input"
+              placeholder="Ask about your browsing history..."
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <button type="submit" id="sendButton" class="send-button">
+              <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </form>
+
+        <!-- Status Indicator -->
+        <div id="chatStatus" class="chat-status">
+          <span id="statusText">Ready to chat</span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="history_chat.js"></script>
+</body>
+</html>

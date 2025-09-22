@@ -1,0 +1,12 @@
+{
+  "name": "ai-history3",
+  "version": "1.0.0",
+  "description": "LLM-Powered Browser History Chrome Extension",
+  "type": "module",
+  "dependencies": {
+    "sqlite-vec-wasm-demo": "^0.1.0"
+  },
+  "scripts": {
+    "install": "node scripts/copy-deps.js"
+  }
+}

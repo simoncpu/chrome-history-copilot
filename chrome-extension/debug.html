@@ -311,6 +311,9 @@
     <div class="header">
       <h1 class="title">AI History Debug</h1>
       <p class="subtitle">Database management and troubleshooting tools</p>
+      <div id="reloadNotice" style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; margin-top: 16px; display: none;">
+        <strong>⚠️ Extension Reload Required:</strong> If you see "Unknown message type" errors, please reload the extension at <a href="chrome://extensions/" target="_blank">chrome://extensions/</a>
+      </div>
     </div>
 
     <!-- Status Section -->
@@ -344,6 +347,15 @@
       <div class="section">
         <h2 class="section-title">Database Explorer</h2>
 
+        <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 13px;">
+          <strong>AI History Extension Schema:</strong><br>
+          • <code>pages</code> - Main table (sqlite-vec virtual table with 384-dim embeddings)<br>
+          • <code>pages_fts</code> - FTS5 virtual table for full-text search<br>
+          • Storage: IndexedDB VFS (not OPFS)<br>
+          • Key columns: title, url, domain, content_text, embedding, visit_count, last_visit_at<br>
+          <strong>Tip:</strong> Use "Sample Queries" for extension-specific examples.
+        </div>
+
         <div class="checkbox-container">
           <input type="checkbox" id="writeMode" class="checkbox">
           <label for="writeMode">Enable Write Mode (Dangerous)</label>
@@ -353,7 +365,7 @@
           <textarea
             id="sqlQuery"
             class="sql-textarea"
-            placeholder="SELECT * FROM pages LIMIT 10;"
+            placeholder="SELECT title, url, domain, last_visit_at FROM pages ORDER BY last_visit_at DESC LIMIT 5;"
           ></textarea>
         </div>
 

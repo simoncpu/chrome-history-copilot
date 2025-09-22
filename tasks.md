@@ -25,9 +25,9 @@ Phase 1.4 — Offscreen Bootstrap & RPC Bridge
 - [x] Expose handlers: `initDb`, `ingestPage`, `search`, `embed`, `summarize`, `clearDb`, `clearModelCache`, `exportDb`, `importDb`
 
 Phase 2.1 — SQLite + sqlite-vec Initialization
-- [ ] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, install OPFS VFS, open `opfs:/ai-history.db`
-- [ ] Create schema: `pages`, `pages_fts` (FTS5), `page_embeddings`
-- [ ] Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable
+- [x] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, install OPFS VFS, open `opfs:/ai-history.db`
+- [x] Create schema: `pages`, `pages_fts` (FTS5), `page_embeddings`
+- [x] Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable
 
 Phase 2.2 — FTS5 Maintenance and Upserts
 - [ ] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates

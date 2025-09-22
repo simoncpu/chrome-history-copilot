@@ -351,3 +351,5 @@ async function answerQuery(query) {
 - Keep UI minimal and fast; side panel only. No separate full‑tab UI unless explicitly requested.
 - Re‑use the approaches documented in the local technical_challenges_* docs; avoid reinventing.
 - When in doubt, prefer local‑first, offline‑first behavior.
+- update @chrome-extension/debug.html to show sql queries or things that the chrome extension actually uses
+- Ignore folders that are named prototype_*/ unless explicitly referenced.

@@ -82,6 +82,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep message channel open for async response
   }
 
+  // Define messages that should be forwarded to offscreen document
+  const offscreenMessages = [
+    'ingest-page', 'search', 'embed', 'clear-db', 'get-stats',
+    'execute-sql', 'clear-model-cache', 'export-db', 'import-db'
+  ];
+
+  if (offscreenMessages.includes(message.type)) {
+    // Forward to offscreen document
+    ensureOffscreenDocument().then(async () => {
+      try {
+        const response = await chrome.runtime.sendMessage(message);
+        sendResponse(response);
+      } catch (error) {
+        console.error('[BG] Failed to forward message to offscreen:', error);
+        sendResponse({ error: error.message });
+      }
+    });
+    return true; // Keep message channel open for async response
+  }
+
   // Handle background-specific messages
   switch (message.type) {
     case 'ping':

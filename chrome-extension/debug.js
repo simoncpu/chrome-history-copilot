@@ -17,16 +17,33 @@ let isConnected = false;
 let currentLogs = [];
 let logRefreshInterval = null;
 
-// Sample queries for convenience
+// Sample queries for convenience - Chrome Extension specific
 const SAMPLE_QUERIES = [
-  'SELECT * FROM pages LIMIT 10;',
-  'SELECT COUNT(*) as total_pages FROM pages;',
-  'SELECT domain, COUNT(*) as page_count FROM pages GROUP BY domain ORDER BY page_count DESC LIMIT 10;',
-  'SELECT title, url, visit_count FROM pages ORDER BY visit_count DESC LIMIT 10;',
-  'SELECT title, url, last_visit_at FROM pages ORDER BY last_visit_at DESC LIMIT 10;',
-  'SELECT * FROM page_embeddings LIMIT 5;',
+  // Basic inspection
+  'SELECT * FROM pages LIMIT 5;',
+  'SELECT name, sql FROM sqlite_master WHERE type=\'table\';',
   'PRAGMA table_info(pages);',
-  'PRAGMA table_info(page_embeddings);'
+
+  // Extension functionality checks
+  'SELECT vec_version();',
+  'SELECT COUNT(*) as total_pages FROM pages;',
+  'SELECT COUNT(*) as pages_with_embeddings FROM pages WHERE embedding IS NOT NULL;',
+
+  // Recent browsing history
+  'SELECT title, url, domain, last_visit_at, visit_count FROM pages ORDER BY last_visit_at DESC LIMIT 10;',
+  'SELECT domain, COUNT(*) as page_count FROM pages GROUP BY domain ORDER BY page_count DESC LIMIT 10;',
+
+  // Search functionality testing
+  'SELECT title, url FROM pages_fts WHERE pages_fts MATCH \'AI\' LIMIT 5;',
+  'SELECT id, title, url FROM pages WHERE embedding IS NOT NULL LIMIT 5;',
+
+  // Extension debugging
+  'SELECT COUNT(*) as fts_entries FROM pages_fts;',
+  'SELECT url, title, length(content_text) as content_length FROM pages WHERE content_text IS NOT NULL LIMIT 5;',
+
+  // Performance analysis
+  'SELECT domain, AVG(visit_count) as avg_visits, COUNT(*) as pages FROM pages GROUP BY domain HAVING COUNT(*) > 1 ORDER BY avg_visits DESC LIMIT 10;',
+  'SELECT title, url, visit_count FROM pages ORDER BY visit_count DESC LIMIT 10;'
 ];
 
 // Initialize when DOM is loaded
@@ -129,7 +146,6 @@ async function connectToOffscreen() {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'ping'
     });
 
@@ -147,6 +163,14 @@ async function connectToOffscreen() {
     console.error('[DEBUG] Connection failed:', error);
     updateStatus('offline', 'Disconnected');
     log(`Connection failed: ${error.message}`, 'error');
+
+    // Show reload notice if it's a message routing issue
+    if (error.message.includes('Unknown message type')) {
+      const reloadNotice = document.getElementById('reloadNotice');
+      if (reloadNotice) {
+        reloadNotice.style.display = 'block';
+      }
+    }
   }
 }
 
@@ -166,7 +190,6 @@ async function refreshStatistics() {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'get-stats'
     });
 
@@ -213,7 +236,6 @@ async function handleExecuteQuery() {
     executeQuery.textContent = 'Executing...';
 
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'execute-sql',
       data: {
         query: query,
@@ -354,7 +376,10 @@ function showSampleQueries() {
 
     item.addEventListener('click', () => {
       sqlQuery.value = query;
-      document.body.removeChild(menu);
+      if (document.body.contains(menu)) {
+        document.body.removeChild(menu);
+      }
+      document.removeEventListener('click', closeMenu);
     });
 
     menu.appendChild(item);
@@ -367,7 +392,7 @@ function showSampleQueries() {
 
   // Close menu when clicking outside
   const closeMenu = (e) => {
-    if (!menu.contains(e.target)) {
+    if (!menu.contains(e.target) && document.body.contains(menu)) {
       document.body.removeChild(menu);
       document.removeEventListener('click', closeMenu);
     }
@@ -392,7 +417,6 @@ async function handleExportDatabase() {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'export-db'
     });
 
@@ -401,11 +425,11 @@ async function handleExportDatabase() {
     }
 
     // Create download link
-    const blob = new Blob([response.data], { type: 'application/octet-stream' });
+    const blob = new Blob([JSON.stringify(response, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ai-history-${new Date().toISOString().split('T')[0]}.db`;
+    a.download = `ai-history-export-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -435,7 +459,6 @@ async function handleImportDatabase() {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'import-db',
       data: {
         data: Array.from(new Uint8Array(arrayBuffer)),
@@ -472,7 +495,6 @@ async function handleClearModelCache() {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'clear-model-cache'
     });
 
@@ -504,7 +526,6 @@ async function handleClearDatabase() {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
       type: 'clear-db'
     });
 

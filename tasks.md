@@ -31,7 +31,7 @@ Phase 2.1 — SQLite + sqlite-vec Initialization
 
 Phase 2.2 — FTS5 Maintenance and Upserts
 - [x] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates
-- [x] Implement idempotent upsert by URL; update `visit_count`, `last_visit_at`
+ - [x] Implement idempotent upsert by URL; update `visit_count`, `last_visit_at` (handles vec0 and fallback paths)
 
 Phase 2.3 — Ingestion Pipeline
 - [x] Listen: `chrome.history.onVisited` + `chrome.tabs.onUpdated({status:'complete'})`
@@ -39,9 +39,9 @@ Phase 2.3 — Ingestion Pipeline
 - [x] Store page row; update FTS; compute/store embedding; optional summary on idle
 
 Phase 3.1 — Transformers.js Setup (Embeddings)
-- [ ] Configure ONNX runtime: `env.backends.onnx.wasm.proxy=false`, `numThreads=1`, `simd=false`, `wasmPaths=chrome.runtime.getURL('lib/')`
-- [ ] Implement `embed(text)` using lightweight sentence model (~384 dims)
-- [ ] Add model cache management; expose `clearModelCache`
+ - [x] Configure ONNX runtime: `env.backends.onnx.wasm.proxy=false`, `numThreads=1`, `simd=false`, `wasmPaths=chrome.runtime.getURL('lib/')`
+ - [x] Implement `embed(text)` using lightweight sentence model (~384 dims)
+ - [x] Add model cache management; expose `clearModelCache`
 
 Phase 3.2 — Candidate Generation (Hybrid)
 - [x] Implement FTS5 BM25 search against `pages_fts` (top K1)
@@ -49,13 +49,14 @@ Phase 3.2 — Candidate Generation (Hybrid)
 - [x] Implement RRF merge (k=60 default) into ~K candidates
 
 Phase 3.3 — Reranking (Stage 2)
-- [x] Normalize BM25/cosine; compute weighted hybrid score + recency/visits boosts
-- [ ] Optional cross-encoder reranker (Transformers.js) behind `aiPrefs.enableReranker`; fallback gracefully
-- [x] Return top N with full metadata for UI/Chat
+ - [x] Normalize BM25/cosine; compute weighted hybrid score + recency/visits boosts
+ - [ ] Optional cross-encoder reranker (Transformers.js) behind `aiPrefs.enableReranker`; fallback gracefully
+ - [x] Return top N with full metadata for UI/Chat
 
 Phase 3.4 — Search API Surface
-- [x] Implement `search(query, { mode, limit })` in offscreen: modes = `hybrid-rerank` (default), `hybrid-rrf`, `text`, `vector`
-- [x] Add `bridge/db-bridge.js` to call offscreen methods from UI
+ - [x] Implement `search(query, { mode, limit })` in offscreen: modes = `hybrid-rerank` (default), `hybrid-rrf`, `text`, `vector`
+ - [x] Add `bridge/db-bridge.js` to call offscreen methods from UI
+ - [x] Add pagination support (offset) in offscreen search and DB queries; dedupe on append
 
 Phase 4.1 — Side Panel Search UI
 - [x] Build `history_search.html`/`.js`: input + debounced query, results list, loader, error/empty states
@@ -72,31 +73,37 @@ Phase 4.3 — Page Toggle UX
 
 Phase 5.1 — Chat UI (Side Panel)
 - [x] Build `history_chat.html`: chat transcript, input, ellipsis loader, context trimming (last ~10–12 turns)
-- [ ] Build `history_chat.js`: chat functionality implementation
+- [x] Build `history_chat.js`: chat functionality implementation
 - [x] Toggle back to Search page seamlessly
+- [ ] Include recent chat turns in AI prompt; trim to last 10–12 turns
 
 Phase 5.2 — Prompt API Integration
 - [x] Create `bridge/ai-bridge.js` for `window.ai.languageModel`
 - [x] Build context from top K search results; enforce link inclusion in system prompt
 - [x] Handle failure with structured response fallback (top results with links)
+ - [ ] Adopt `ai-bridge.js` in Chat UI for session + prompts
 
 Phase 6.1 — Debug Page (DB Explorer)
 - [x] Build `debug.html`/`.js` for query runner (read-only default, guarded write toggle)
 - [x] Buttons: Clear DB, Clear Model Cache, Export DB, Import DB
+  - [ ] Implement full SQLite export (downloadable `.db`)
+  - [ ] Implement SQLite import that restores DB state
+  - [ ] Expose DB size in `get-stats` for display
 
 Phase 6.2 — Background Context Menu
 - [x] Ensure "AI History: Debug" opens `debug.html` in new tab
-- [ ] Add guardrails (confirm destructive actions)
+- [x] Add guardrails (confirm destructive actions)
 
 Phase 7.1 — Preferences & Resilience
-- [x] Implement `chrome.storage.local` keys: `searchMode`, `lastSidePanelPage`, `aiPrefs { enableReranker, allowCloudModel }`
+- [x] Implement `searchMode`, `lastSidePanelPage` storage in `chrome.storage.local`
+- [ ] Add `aiPrefs { enableReranker, allowCloudModel }` storage + wire-up
 - [x] Offscreen lifecycle: single-instance reuse; reconnection logic; retries with backoff
 
 Phase 7.2 — Error Handling & Fallbacks
 - [x] FTS5 absent → LIKE fallback; log in debug
 - [x] sqlite-vec absent → text-only mode; log in debug
 - [ ] Embedding model load fail → text-only; retry option
-- [ ] Prompt session fail → structured response fallback
+- [x] Prompt session fail → structured response fallback
 
 Phase 8.1 — Manual QA
 - [ ] Verify: ingestion on visited pages, search modes, chat links, debug tools
@@ -118,4 +125,3 @@ Phase 8.4 — Packaging & Docs
 - [ ] Update `manifest.json: version`; zip `chrome-extension/` for release
 - [ ] Update README/notes (local docs); ensure no external references
 - [ ] Final privacy pass: no telemetry; explicit local-first behavior
-

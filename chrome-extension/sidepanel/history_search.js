@@ -22,6 +22,7 @@ let currentResults = [];
 let currentOffset = 0;
 let isLoading = false;
 let hasMoreResults = false;
+let lastBatch = [];
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeSearchPage);
@@ -190,12 +191,17 @@ async function performSearch(query, offset = 0) {
 
     if (offset === 0) {
       currentResults = results;
+      lastBatch = results;
     } else {
-      currentResults = [...currentResults, ...results];
+      // Dedupe on append by id or URL
+      const seen = new Set(currentResults.map(r => r.id || r.url));
+      const filtered = results.filter(r => !seen.has(r.id || r.url));
+      currentResults = [...currentResults, ...filtered];
+      lastBatch = filtered;
     }
 
-    currentOffset += results.length;
-    hasMoreResults = results.length === 25; // Assume more if we got a full page
+    currentOffset = currentResults.length;
+    hasMoreResults = (results.length === 25); // backend page full
 
     // Display results
     if (currentResults.length === 0 && offset === 0) {
@@ -252,12 +258,12 @@ function displayResults() {
   resultsList.classList.remove('hidden');
 
   // Clear existing results if this is a new search
-  if (currentOffset - currentResults.length + (currentResults.length - 25) <= 0) {
+  if (currentOffset === (lastBatch?.length || 0)) {
     resultsList.innerHTML = '';
   }
 
   // Add new results
-  const newResults = currentResults.slice(-25); // Last 25 results (the new ones)
+  const newResults = lastBatch && lastBatch.length ? lastBatch : currentResults;
   newResults.forEach(result => {
     const resultElement = createResultElement(result);
     resultsList.appendChild(resultElement);

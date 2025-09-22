@@ -8,6 +8,7 @@ console.log('[OFFSCREEN] Initializing offscreen document');
 // Database and ML state
 let db = null;
 let embedModel = null;
+let embedder = null; // Transformers.js pipeline
 let isInitialized = false;
 
 // Message handling
@@ -282,103 +283,232 @@ class DatabaseWrapper {
         return { id: null };
       }
 
-      // Insert into vec0 table (includes embedding)
-      const stmt = this.db.prepare(`
-        INSERT INTO pages (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
+      // Check if URL exists and update instead of inserting a duplicate
+      let existingId = null;
+      let existingVisitCount = 0;
+      let existingFirstVisit = null;
       try {
-        const embeddingJson = JSON.stringify(Array.from(pageData.embedding));
-
-        stmt.bind([
-          pageData.url || '',
-          pageData.domain || '',
-          pageData.title || '',
-          pageData.content_text || '',
-          pageData.summary || '',
-          pageData.favicon_url || '',
-          pageData.first_visit_at,
-          pageData.last_visit_at,
-          pageData.visit_count,
-          embeddingJson
-        ]);
-        stmt.step();
-        stmt.finalize();
-
-        // Get the inserted row ID
-        const insertedId = this.db.selectValue('SELECT last_insert_rowid()');
-
-        // Manually synchronize with FTS5 table
-        try {
-          const ftsStmt = this.db.prepare(`
-            INSERT INTO pages_fts (id, title, content_text)
-            VALUES (?, ?, ?)
-          `);
-          ftsStmt.bind([insertedId, pageData.title, pageData.content_text]);
-          ftsStmt.step();
-          ftsStmt.finalize();
-        } catch (ftsError) {
-          console.warn('[DB] FTS5 update failed:', ftsError);
+        const checkStmt = this.db.prepare('SELECT id, visit_count, first_visit_at FROM pages WHERE url = ? LIMIT 1');
+        checkStmt.bind([pageData.url]);
+        if (checkStmt.step()) {
+          existingId = checkStmt.get(0);
+          existingVisitCount = Number(checkStmt.get(1)) || 0;
+          existingFirstVisit = Number(checkStmt.get(2)) || pageData.first_visit_at;
         }
+        checkStmt.finalize();
+      } catch (e) {
+        console.warn('[DB] Upsert check failed (vec0):', e);
+      }
 
-        return { id: insertedId };
-      } catch (error) {
-        stmt.finalize();
-        throw error;
+      const embeddingJson = JSON.stringify(Array.from(pageData.embedding));
+
+      if (existingId) {
+        const upd = this.db.prepare(`
+          UPDATE pages
+          SET domain = ?, title = ?, content_text = ?, summary = ?, favicon_url = ?,
+              last_visit_at = ?, visit_count = ?, embedding = ?
+          WHERE id = ?
+        `);
+        try {
+          const newVisit = existingVisitCount + 1;
+          upd.bind([
+            pageData.domain || '',
+            pageData.title || '',
+            pageData.content_text || '',
+            pageData.summary || '',
+            pageData.favicon_url || '',
+            pageData.last_visit_at,
+            newVisit,
+            embeddingJson,
+            existingId
+          ]);
+          upd.step();
+          upd.finalize();
+
+          // Sync FTS5
+          try {
+            const ftsUpd = this.db.prepare(`
+              INSERT OR REPLACE INTO pages_fts (id, title, content_text)
+              VALUES (?, ?, ?)
+            `);
+            ftsUpd.bind([existingId, pageData.title, pageData.content_text]);
+            ftsUpd.step();
+            ftsUpd.finalize();
+          } catch (ftsError) {
+            console.warn('[DB] FTS5 update failed (update):', ftsError);
+          }
+
+          return { id: existingId };
+        } catch (error) {
+          upd.finalize();
+          throw error;
+        }
+      } else {
+        // Insert new
+        const stmt = this.db.prepare(`
+          INSERT INTO pages (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count, embedding)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        try {
+          stmt.bind([
+            pageData.url || '',
+            pageData.domain || '',
+            pageData.title || '',
+            pageData.content_text || '',
+            pageData.summary || '',
+            pageData.favicon_url || '',
+            pageData.first_visit_at,
+            pageData.last_visit_at,
+            pageData.visit_count,
+            embeddingJson
+          ]);
+          stmt.step();
+          stmt.finalize();
+
+          const insertedId = this.db.selectValue('SELECT last_insert_rowid()');
+
+          // Sync FTS5
+          try {
+            const ftsStmt = this.db.prepare(`
+              INSERT INTO pages_fts (id, title, content_text)
+              VALUES (?, ?, ?)
+            `);
+            ftsStmt.bind([insertedId, pageData.title, pageData.content_text]);
+            ftsStmt.step();
+            ftsStmt.finalize();
+          } catch (ftsError) {
+            console.warn('[DB] FTS5 update failed:', ftsError);
+          }
+
+          return { id: insertedId };
+        } catch (error) {
+          stmt.finalize();
+          throw error;
+        }
       }
     } else {
       // Fallback to regular table
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO pages
-        (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
       try {
-        const result = stmt.run(
-          pageData.url,
-          pageData.domain,
-          pageData.title,
-          pageData.content_text,
-          pageData.summary || null,
-          pageData.favicon_url || null,
-          pageData.first_visit_at,
-          pageData.last_visit_at,
-          pageData.visit_count
-        );
-
-        // Update FTS5 table if available
-        try {
-          const ftsStmt = this.db.prepare(`
-            INSERT OR REPLACE INTO pages_fts(rowid, title, content_text)
-            VALUES (?, ?, ?)
-          `);
-          ftsStmt.run(result.lastInsertRowid, pageData.title, pageData.content_text);
-          ftsStmt.finalize();
-        } catch (ftsError) {
-          console.warn('[DB] FTS5 update failed:', ftsError);
+        // Check existing by URL
+        let existingId = null;
+        let existingVisitCount = 0;
+        let existingLastVisit = null;
+        const checkStmt = this.db.prepare('SELECT id, visit_count, last_visit_at FROM pages WHERE url = ? LIMIT 1');
+        checkStmt.bind([pageData.url]);
+        if (checkStmt.step()) {
+          existingId = checkStmt.get(0);
+          existingVisitCount = Number(checkStmt.get(1)) || 0;
+          existingLastVisit = Number(checkStmt.get(2)) || pageData.last_visit_at;
         }
+        checkStmt.finalize();
 
-        // Store embedding in separate table for fallback mode
-        if (pageData.embedding) {
+        if (existingId) {
+          // Update existing
+          const newVisit = existingVisitCount + 1;
+          const upd = this.db.prepare(`
+            UPDATE pages
+            SET domain = ?, title = ?, content_text = ?, summary = ?, favicon_url = ?,
+                last_visit_at = ?, visit_count = ?
+            WHERE id = ?
+          `);
+          upd.bind([
+            pageData.domain,
+            pageData.title,
+            pageData.content_text,
+            pageData.summary || null,
+            pageData.favicon_url || null,
+            Math.max(existingLastVisit || 0, pageData.last_visit_at || 0),
+            newVisit,
+            existingId
+          ]);
+          upd.step();
+          upd.finalize();
+
+          // FTS update
           try {
-            const embStmt = this.db.prepare(`
-              INSERT OR REPLACE INTO page_embeddings (id, embedding, updated_at)
+            const ftsStmt = this.db.prepare(`
+              INSERT OR REPLACE INTO pages_fts(rowid, title, content_text)
               VALUES (?, ?, ?)
             `);
-            const embeddingBlob = new Uint8Array(pageData.embedding.buffer);
-            embStmt.run(result.lastInsertRowid, embeddingBlob, Date.now());
-            embStmt.finalize();
-          } catch (embError) {
-            console.warn('[DB] Embedding storage failed:', embError);
+            ftsStmt.bind([existingId, pageData.title, pageData.content_text]);
+            ftsStmt.step();
+            ftsStmt.finalize();
+          } catch (ftsError) {
+            console.warn('[DB] FTS5 update failed:', ftsError);
           }
-        }
 
-        stmt.finalize();
-        return { id: result.lastInsertRowid };
+          // Embedding upsert
+          if (pageData.embedding) {
+            try {
+              const embStmt = this.db.prepare(`
+                INSERT OR REPLACE INTO page_embeddings (id, embedding, updated_at)
+                VALUES (?, ?, ?)
+              `);
+              const embeddingBlob = new Uint8Array(pageData.embedding.buffer);
+              embStmt.bind([existingId, embeddingBlob, Date.now()]);
+              embStmt.step();
+              embStmt.finalize();
+            } catch (embError) {
+              console.warn('[DB] Embedding storage failed:', embError);
+            }
+          }
+
+          return { id: existingId };
+        } else {
+          // Insert new
+          const stmt = this.db.prepare(`
+            INSERT INTO pages
+            (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          stmt.bind([
+            pageData.url,
+            pageData.domain,
+            pageData.title,
+            pageData.content_text,
+            pageData.summary || null,
+            pageData.favicon_url || null,
+            pageData.first_visit_at,
+            pageData.last_visit_at,
+            pageData.visit_count
+          ]);
+          stmt.step();
+          stmt.finalize();
+          const insertedId = this.db.selectValue('SELECT last_insert_rowid()');
+
+          // FTS sync
+          try {
+            const ftsStmt = this.db.prepare(`
+              INSERT OR REPLACE INTO pages_fts(rowid, title, content_text)
+              VALUES (?, ?, ?)
+            `);
+            ftsStmt.bind([insertedId, pageData.title, pageData.content_text]);
+            ftsStmt.step();
+            ftsStmt.finalize();
+          } catch (ftsError) {
+            console.warn('[DB] FTS5 update failed:', ftsError);
+          }
+
+          // Embedding store
+          if (pageData.embedding) {
+            try {
+              const embStmt = this.db.prepare(`
+                INSERT OR REPLACE INTO page_embeddings (id, embedding, updated_at)
+                VALUES (?, ?, ?)
+              `);
+              const embeddingBlob = new Uint8Array(pageData.embedding.buffer);
+              embStmt.bind([insertedId, embeddingBlob, Date.now()]);
+              embStmt.step();
+              embStmt.finalize();
+            } catch (embError) {
+              console.warn('[DB] Embedding storage failed:', embError);
+            }
+          }
+
+          return { id: insertedId };
+        }
       } catch (error) {
-        stmt.finalize();
         throw error;
       }
     }
@@ -386,37 +516,38 @@ class DatabaseWrapper {
 
 
   async search(query, options = {}) {
-    const { mode = 'hybrid-rerank', limit = 25 } = options;
+    const { mode = 'hybrid-rerank', limit = 25, offset = 0 } = options;
 
     console.log(`[DB] Performing ${mode} search for:`, query);
 
     switch (mode) {
       case 'text':
-        return this.textSearch(query, limit);
+        return this.textSearch(query, limit, offset);
       case 'vector':
-        return this.vectorSearch(options.queryEmbedding, limit);
+        return this.vectorSearch(options.queryEmbedding, limit, offset);
       case 'hybrid-rrf':
       case 'hybrid-rerank':
-        return this.hybridSearch(query, options.queryEmbedding, limit, mode);
+        return this.hybridSearch(query, options.queryEmbedding, limit, offset, mode);
       default:
         throw new Error(`Unknown search mode: ${mode}`);
     }
   }
 
-  async textSearch(query, limit) {
+  async textSearch(query, limit, offset = 0) {
     // Try FTS5 first, fallback to LIKE
     try {
       const stmt = this.db.prepare(`
-        SELECT p.*, snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
+        SELECT p.*, bm25(pages_fts) AS bm25_score,
+               snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
         FROM pages_fts
         JOIN pages p ON p.id = pages_fts.id
         WHERE pages_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
+        ORDER BY bm25_score
+        LIMIT ? OFFSET ?
       `);
 
       const results = [];
-      stmt.bind([query, limit]);
+      stmt.bind([query, limit, offset]);
       while (stmt.step()) {
         results.push(this.rowToObject(stmt));
       }
@@ -433,11 +564,11 @@ class DatabaseWrapper {
         FROM pages
         WHERE LOWER(title) LIKE ? OR LOWER(content_text) LIKE ?
         ORDER BY last_visit_at DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
       `);
 
       const results = [];
-      stmt.bind([likeQuery, likeQuery, limit]);
+      stmt.bind([likeQuery, likeQuery, limit, offset]);
       while (stmt.step()) {
         results.push(this.rowToObject(stmt));
       }
@@ -452,7 +583,7 @@ class DatabaseWrapper {
     return this._isVecTable === true;
   }
 
-  async vectorSearch(queryEmbedding, limit) {
+  async vectorSearch(queryEmbedding, limit, offset = 0) {
     if (!queryEmbedding) {
       throw new Error('Query embedding required for vector search');
     }
@@ -469,11 +600,11 @@ class DatabaseWrapper {
         FROM pages
         WHERE embedding MATCH ?
         ORDER BY distance
-        LIMIT ?
+        LIMIT ? OFFSET ?
       `);
 
       const results = [];
-      stmt.bind([JSON.stringify(Array.from(queryEmbedding)), limit]);
+      stmt.bind([JSON.stringify(Array.from(queryEmbedding)), limit, offset]);
 
       while (stmt.step()) {
         results.push(this.rowToObject(stmt));
@@ -487,31 +618,34 @@ class DatabaseWrapper {
     }
   }
 
-  async hybridSearch(query, queryEmbedding, limit, mode) {
+  async hybridSearch(query, queryEmbedding, limit, offset, mode) {
     if (!this.hasVecSupport() || !queryEmbedding) {
       console.warn('[DB] Vector search not available, falling back to text search');
-      return this.textSearch(query, limit);
+      return this.textSearch(query, limit, offset);
     }
 
     try {
       // Get candidates from both search methods
-      const candidateSize = Math.min(limit * 4, 100); // Get more candidates for fusion
+      const needed = Math.min(offset + limit, 200);
+      const candidateSize = Math.min(needed * 4, 200);
       const [textResults, vectorResults] = await Promise.all([
-        this.textSearch(query, candidateSize),
-        this.vectorSearch(queryEmbedding, candidateSize)
+        this.textSearch(query, candidateSize, 0),
+        this.vectorSearch(queryEmbedding, candidateSize, 0)
       ]);
 
       if (mode === 'hybrid-rrf') {
         // Use RRF fusion only
-        return this.reciprocalRankFusion(textResults, vectorResults, limit);
+        const fused = this.reciprocalRankFusion(textResults, vectorResults, needed);
+        return fused.slice(offset, offset + limit);
       } else {
-        // hybrid-rerank: RRF + additional scoring
-        const candidates = this.reciprocalRankFusion(textResults, vectorResults, limit * 2);
-        return this.rerankCandidates(candidates, query, limit);
+        // hybrid-rerank: normalized weighted hybrid + boosts
+        const candidates = this.reciprocalRankFusion(textResults, vectorResults, needed * 2);
+        const reranked = this.rerankCandidates(candidates, query, textResults, vectorResults, needed);
+        return reranked.slice(offset, offset + limit);
       }
     } catch (error) {
       console.error('[DB] Hybrid search failed, falling back to text search:', error);
-      return this.textSearch(query, limit);
+      return this.textSearch(query, limit, offset);
     }
   }
 
@@ -543,36 +677,66 @@ class DatabaseWrapper {
       }));
   }
 
-  rerankCandidates(candidates, query, limit) {
-    // Simple reranking based on additional features
-    // This can be enhanced with cross-encoder models in future phases
+  rerankCandidates(candidates, query, textResults, vectorResults, needCount) {
+    // Normalized weighted hybrid: cosine (via distance), BM25, recency, visits
     const now = Date.now();
 
-    return candidates.map(doc => {
-      let score = doc.rrfScore || 0;
+    // Build maps for quick lookup
+    const vecDistMap = new Map();
+    const bm25Map = new Map();
+    const visitVals = [];
 
-      // Add recency boost (more recent = higher score)
-      const daysSinceVisit = (now - doc.last_visit_at) / (1000 * 60 * 60 * 24);
-      const recencyBoost = Math.exp(-daysSinceVisit / 30) * 0.1; // Decay over 30 days
+    vectorResults.forEach(d => { if (d.id != null && typeof d.distance === 'number') vecDistMap.set(d.id, d.distance); });
+    textResults.forEach(d => { if (d.id != null && typeof d.bm25_score === 'number') bm25Map.set(d.id, d.bm25_score); });
 
-      // Add popularity boost
-      const popularityBoost = Math.log(doc.visit_count + 1) * 0.05;
+    const vecVals = Array.from(vecDistMap.values());
+    const bmVals = Array.from(bm25Map.values());
 
-      // Add title match boost
-      const titleMatch = doc.title && doc.title.toLowerCase().includes(query.toLowerCase()) ? 0.2 : 0;
-
-      const finalScore = score + recencyBoost + popularityBoost + titleMatch;
-
+    const mkNorm = (vals, smallerIsBetter) => {
+      if (!vals.length) return { norm: () => 0 };
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      const range = Math.max(1e-9, max - min);
       return {
-        ...doc,
-        finalScore,
-        recencyBoost,
-        popularityBoost,
-        titleMatch
+        norm: (v) => {
+          const x = (v - min) / range; // 0..1
+          return smallerIsBetter ? 1 - x : x;
+        }
       };
+    };
+
+    const vecN = mkNorm(vecVals, true);
+    const bmN = mkNorm(bmVals, true);
+
+    candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
+    const maxVisits = Math.max(1, ...visitVals);
+
+    const wVec = 0.5, wBm25 = 0.3, wRec = 0.1, wVis = 0.1;
+
+    const scored = candidates.map(doc => {
+      const vDist = vecDistMap.get(doc.id);
+      const vScore = (typeof vDist === 'number') ? vecN.norm(vDist) : 0;
+
+      const bm = bm25Map.get(doc.id);
+      const tScore = (typeof bm === 'number') ? bmN.norm(bm) : 0;
+
+      const days = (now - (doc.last_visit_at || now)) / (1000 * 60 * 60 * 24);
+      const rec = Math.exp(-days / 30);
+
+      const vc = Number(doc.visit_count) || 0;
+      const vis = Math.log(vc + 1) / Math.log(maxVisits + 1);
+
+      const titleBoost = doc.title && String(doc.title).toLowerCase().includes(String(query).toLowerCase()) ? 0.05 : 0;
+
+      const base = (wVec * vScore) + (wBm25 * tScore) + (wRec * rec) + (wVis * vis) + titleBoost;
+      const finalScore = base > 0 ? base : (doc.rrfScore || 0);
+
+      return { ...doc, finalScore, vScore, tScore, recency: rec, visitsNorm: vis };
     })
     .sort((a, b) => b.finalScore - a.finalScore)
-    .slice(0, limit);
+    .slice(0, needCount);
+
+    return scored;
   }
 
   rowToObject(stmt, columnNames = null) {
@@ -675,18 +839,59 @@ class DatabaseWrapper {
 
 // Embeddings initialization
 async function initializeEmbeddings() {
-  console.log('[ML] Initializing embedding model...');
+  console.log('[ML] Initializing embedding model (Transformers.js)...');
 
-  // TODO: Replace with actual Transformers.js implementation
-  embedModel = {
-    initialized: true,
-    async embed(text) {
-      // Mock 384-dimensional embedding for now
-      return new Float32Array(384).fill(0).map(() => Math.random() - 0.5);
+  try {
+    const mod = await import(chrome.runtime.getURL('lib/transformers.min.js'));
+    const env = mod.env;
+    // Configure ONNX runtime for MV3 extension constraints
+    env.backends.onnx.wasm.proxy = false;
+    env.backends.onnx.wasm.numThreads = 1;
+    env.backends.onnx.wasm.simd = false;
+    env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/');
+    // Avoid probing non-existent extension-local model files to prevent DevTools 404s
+    if (typeof env.allowLocalModels !== 'undefined') {
+      env.allowLocalModels = false;
     }
-  };
+    if (typeof env.allowRemoteModels !== 'undefined') {
+      env.allowRemoteModels = true;
+    }
 
-  console.log('[ML] Mock embedding model initialized');
+    const { pipeline } = mod;
+    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+
+    embedModel = {
+      initialized: true,
+      async embed(text) {
+        const str = typeof text === 'string' ? text : String(text || '');
+        const out = await embedder(str, { pooling: 'mean', normalize: true });
+        const data = out?.data || out; // transformers.js returns tensor-like
+        return data instanceof Float32Array ? data : new Float32Array(data);
+      }
+    };
+    console.log('[ML] Embedding model ready');
+  } catch (e) {
+    // Expected in offline dev or when network/cache unavailable; use fallback
+    console.warn('[ML] Embedding model init failed, using fallback mock:', e?.message || e);
+    // Fallback deterministic mock so the app remains usable in dev
+    embedModel = {
+      initialized: true,
+      async embed(text) {
+        const seed = String(text || 'webpage');
+        const vec = new Float32Array(384);
+        let h = 2166136261;
+        for (let i = 0; i < seed.length; i++) {
+          h ^= seed.charCodeAt(i);
+          h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+        }
+        for (let i = 0; i < 384; i++) {
+          h ^= (h << 13); h ^= (h >>> 17); h ^= (h << 5);
+          vec[i] = ((h >>> 0) % 1000) / 500 - 1; // [-1, 1]
+        }
+        return vec;
+      }
+    };
+  }
 }
 
 // Page ingestion
@@ -813,7 +1018,7 @@ async function ingestCapturedQueue() {
 }
 
 // Search implementation
-async function search({ query, mode = 'hybrid-rerank', limit = 25 }) {
+async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
   console.log('[OFFSCREEN] Searching:', query, 'mode:', mode);
 
   try {
@@ -824,6 +1029,7 @@ async function search({ query, mode = 'hybrid-rerank', limit = 25 }) {
     const results = await db.search(query, {
       mode,
       limit,
+      offset,
       queryEmbedding
     });
 
@@ -911,6 +1117,7 @@ async function clearModelCache() {
   try {
     // Reset embedding model
     embedModel = null;
+    embedder = null;
 
     // Force garbage collection if available
     if (global.gc) {

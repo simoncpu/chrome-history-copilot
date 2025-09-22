@@ -8,9 +8,8 @@ chrome.runtime.onInstalled.addListener(() => {
   setupContextMenu();
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  setupContextMenu();
-});
+// Note: do not create context menu on startup to avoid duplicate id errors
+// Service worker restarts don't remove menus; onInstalled is sufficient.
 
 // Side panel management
 chrome.action.onClicked.addListener(async (tab) => {
@@ -24,10 +23,14 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // Context menu setup
 function setupContextMenu() {
+  // Create menu once; ignore duplicate-id error if any
   chrome.contextMenus.create({
     id: 'ai-history-debug',
     title: 'AI History: Debug',
     contexts: ['page', 'action']
+  }, () => {
+    // Swallow duplicate-id errors to keep logs clean in dev
+    void chrome.runtime.lastError;
   });
 }
 
@@ -57,7 +60,8 @@ async function ensureOffscreenDocument() {
     }
 
     await chrome.offscreen.createDocument({
-      url: 'offscreen.html',
+      // Disable OPFS attempts in offscreen (main thread) to avoid benign warnings
+      url: 'offscreen.html?opfs-disable',
       reasons: ['DOM_SCRAPING', 'LOCAL_STORAGE'],
       justification: 'SQLite database operations and ML model processing'
     });
@@ -200,19 +204,42 @@ async function extractPageContent(url, sendResponse) {
 
     const tab = tabs[0];
 
-    // Send message to content script
-    chrome.tabs.sendMessage(tab.id, { type: 'getPageContent' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('[BG] Failed to extract content:', chrome.runtime.lastError.message);
-        sendResponse({ error: chrome.runtime.lastError.message });
-      } else {
-        sendResponse(response);
-      }
-    });
+    // Send message to content script with a small retry to avoid race conditions
+    try {
+      const response = await sendMessageWithRetry(tab.id, { type: 'getPageContent' });
+      sendResponse(response);
+    } catch (e) {
+      console.error('[BG] Failed to extract content:', e.message);
+      sendResponse({ error: e.message });
+    }
 
   } catch (error) {
     console.error('[BG] Content extraction error:', error);
     sendResponse({ error: error.message });
+  }
+}
+
+// Helper: tabs.sendMessage with retry when content script isn't ready yet
+async function sendMessageWithRetry(tabId, message, attempts = 3, delayMs = 300) {
+  const shouldRetry = (msg) => /Receiving end does not exist|Could not establish connection/i.test(msg || '');
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        chrome.tabs.sendMessage(tabId, message, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+    } catch (e) {
+      if (i === attempts - 1 || !shouldRetry(e.message)) {
+        throw e;
+      }
+      await new Promise((r) => setTimeout(r, delayMs * Math.pow(2, i)));
+    }
   }
 }
 
@@ -364,15 +391,7 @@ async function processIngestionQueue() {
 
         if (tabs.length > 0) {
           try {
-            extractedContent = await new Promise((resolve, reject) => {
-              chrome.tabs.sendMessage(tabs[0].id, { type: 'getPageContent' }, (response) => {
-                if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                  resolve(response);
-                }
-              });
-            });
+            extractedContent = await sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });
           } catch (e) {
             console.warn('[BG] Failed to extract content for:', pageInfo.url, e.message);
           }

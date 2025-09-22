@@ -124,6 +124,19 @@ async function initializeDatabase() {
   console.log('[DB] Initializing SQLite database...');
 
   try {
+    // Prepare sqlite3 config to suppress harmless OPFS warning during init
+    // This warning appears when running on the main thread where Atomics.wait isn't allowed.
+    // We use IndexedDB VFS, so it's expected and safe to ignore.
+    globalThis.sqlite3ApiConfig = Object.assign({}, globalThis.sqlite3ApiConfig, {
+      warn: (...args) => {
+        const message = args.join(' ');
+        if (message.includes('Ignoring inability to install OPFS sqlite3_vfs')) {
+          return; // suppress benign OPFS warning
+        }
+        console.warn('[SQLITE]', ...args);
+      }
+    });
+
     // Import sqlite3 module
     const sqlite3InitModule = (await import(chrome.runtime.getURL('lib/sqlite3.mjs'))).default;
 

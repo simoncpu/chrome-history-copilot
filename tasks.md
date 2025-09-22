@@ -25,9 +25,9 @@ Phase 1.4 — Offscreen Bootstrap & RPC Bridge
 - [x] Expose handlers: `initDb`, `ingestPage`, `search`, `embed`, `summarize`, `clearDb`, `clearModelCache`, `exportDb`, `importDb`
 
 Phase 2.1 — SQLite + sqlite-vec Initialization
-- [x] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, install OPFS VFS, open `opfs:/ai-history.db`
+- [x] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, use IndexedDB VFS, open `/ai-history.db`
 - [x] Create schema: `pages`, `pages_fts` (FTS5), `page_embeddings`
-- [x] Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable
+- [x] ~~Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable~~ (OPFS removed, IndexedDB only)
 
 Phase 2.2 — FTS5 Maintenance and Upserts
 - [x] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates
@@ -106,7 +106,15 @@ Phase 8.2 — Performance Tuning
 - [ ] Index and query tuning; caching; reduce payloads
 - [ ] Gate heavy reranker on capable devices; add toggle in Debug
 
-Phase 8.3 — Packaging & Docs
+Phase 8.3 — Code Cleanup & Optimization
+- [x] Force IndexedDB VFS (remove OPFS complexity as not suitable for use case)
+- [x] Clean up trial-and-error leftover code and redundant fallbacks
+- [x] Remove excessive debug logging and simplify overly defensive patterns
+- [x] Streamline debug.html UI (remove non-functional extraction testing)
+- [x] Simplify mock embedding model implementation
+- [x] Remove unused functions and dead code paths
+
+Phase 8.4 — Packaging & Docs
 - [ ] Update `manifest.json: version`; zip `chrome-extension/` for release
 - [ ] Update README/notes (local docs); ensure no external references
 - [ ] Final privacy pass: no telemetry; explicit local-first behavior

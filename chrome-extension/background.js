@@ -5,12 +5,11 @@
 
 // Extension installation and startup
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[BG] Extension installed');
   setupContextMenu();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[BG] Extension startup');
+  setupContextMenu();
 });
 
 // Side panel management
@@ -148,13 +147,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // History ingestion triggers
 chrome.history.onVisited.addListener((historyItem) => {
-  console.log('[BG] Page visited:', historyItem.url);
-  // Queue for ingestion
-  queuePageForIngestion(historyItem);
+  // Skip internal URLs
+  if (!isInternalUrl(historyItem.url)) {
+    console.log('[BG] Page visited:', historyItem.url);
+    // Queue for ingestion
+    queuePageForIngestion(historyItem);
+  }
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+  if (changeInfo.status === 'complete' && tab.url && !isInternalUrl(tab.url)) {
     console.log('[BG] Tab completed loading:', tab.url);
     // Trigger content extraction and ingestion
     queuePageForIngestion({
@@ -308,8 +310,33 @@ async function deleteCapturedEntries(urls, sendResponse) {
 // Page ingestion queue (legacy support)
 const ingestionQueue = [];
 let isProcessingQueue = false;
+const recentlyProcessed = new Set(); // Track recently processed URLs
+
+function isInternalUrl(url) {
+  // Skip internal Chrome/Edge pages and extension pages
+  return url.startsWith('chrome://') ||
+         url.startsWith('chrome-extension://') ||
+         url.startsWith('edge://') ||
+         url.startsWith('about:') ||
+         url.startsWith('file://');
+}
 
 async function queuePageForIngestion(pageInfo) {
+  // Skip internal URLs that we can't extract content from
+  if (isInternalUrl(pageInfo.url)) {
+    return;
+  }
+
+  // Skip if we've recently processed this URL (dedupe within 30 seconds)
+  const urlKey = pageInfo.url;
+  if (recentlyProcessed.has(urlKey)) {
+    return;
+  }
+
+  // Mark as recently processed
+  recentlyProcessed.add(urlKey);
+  setTimeout(() => recentlyProcessed.delete(urlKey), 30000); // Clean up after 30s
+
   ingestionQueue.push(pageInfo);
 
   if (!isProcessingQueue) {

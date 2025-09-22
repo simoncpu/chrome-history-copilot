@@ -2,7 +2,6 @@
  * AI History Debug - Debug Page Controller
  */
 
-console.log('[DEBUG] Initializing debug page');
 
 // DOM elements
 let pageCount, embeddingCount, dbSize, statusIndicator, statusText;
@@ -59,8 +58,6 @@ const SAMPLE_QUERIES = [
 document.addEventListener('DOMContentLoaded', initializeDebugPage);
 
 function initializeDebugPage() {
-  console.log('[DEBUG] DOM loaded, initializing...');
-
   // Get DOM elements
   initializeDOMElements();
 
@@ -77,8 +74,6 @@ function initializeDebugPage() {
 
   // Start auto-refresh for logs
   startLogRefresh();
-
-  console.log('[DEBUG] Debug page initialized');
 }
 
 function initializeDOMElements() {

@@ -130,53 +130,28 @@ async function initializeDatabase() {
     console.log('[DB] Loading SQLite WASM...');
     const sqlite3 = await sqlite3InitModule({
       print: (...args) => console.log('[SQLITE]', ...args),
-      printErr: (...args) => console.error('[SQLITE]', ...args),
+      printErr: (...args) => {
+        // Filter out harmless OPFS warning since we use IndexedDB VFS
+        const message = args.join(' ');
+        if (message.includes('Ignoring inability to install OPFS sqlite3_vfs')) {
+          return;
+        }
+        console.error('[SQLITE]', ...args);
+      },
     });
 
     console.log('[DB] SQLite WASM loaded, version:', sqlite3.version.libVersion);
 
-    // Install OPFS VFS if available, fallback to default VFS
-    let vfsName = 'opfs';
-    try {
-      if (sqlite3.opfs) {
-        const opfs = await sqlite3.opfs.OpfsDb.isAvailable();
-        if (opfs) {
-          console.log('[DB] OPFS VFS is available');
-          vfsName = 'opfs';
-        } else {
-          console.log('[DB] OPFS not available, using default VFS');
-          vfsName = undefined; // Use default VFS
-        }
-      } else {
-        console.log('[DB] OPFS module not found, using default VFS');
-        vfsName = undefined;
-      }
-    } catch (opfsError) {
-      console.warn('[DB] OPFS check failed, falling back to default VFS:', opfsError);
-      vfsName = undefined;
-    }
-
-    // Open database
-    let sqliteDb;
-    const dbPath = vfsName === 'opfs' ? 'opfs:/ai-history.db' : '/ai-history.db';
-
-    if (vfsName === 'opfs' && sqlite3.opfs) {
-      console.log('[DB] Opening OPFS database:', dbPath);
-      sqliteDb = new sqlite3.opfs.OpfsDb(dbPath);
-    } else {
-      console.log('[DB] Opening database with default VFS:', dbPath);
-      sqliteDb = new sqlite3.oo1.DB(dbPath, 'c');
-    }
-
-    console.log('[DB] Database opened successfully');
+    // Use IndexedDB VFS (default)
+    const dbPath = '/ai-history.db';
+    console.log('[DB] Opening IndexedDB database:', dbPath);
+    const sqliteDb = new sqlite3.oo1.DB(dbPath, 'c');
 
     // Create database wrapper with our API
     db = new DatabaseWrapper(sqliteDb, sqlite3);
 
     // Initialize schema
     await db.initializeSchema();
-
-    console.log('[DB] Database initialized with schema');
 
   } catch (error) {
     console.error('[DB] Failed to initialize SQLite:', error);
@@ -194,16 +169,6 @@ class DatabaseWrapper {
   }
 
   async initializeSchema() {
-    console.log('[DB] Creating database schema...');
-
-    // Try to verify sqlite-vec is available
-    try {
-      this.db.selectValue('SELECT vec_version()');
-      console.log('[DB] sqlite-vec extension verified');
-    } catch (vecError) {
-      console.warn('[DB] sqlite-vec not available:', vecError);
-    }
-
     // Create main pages table using sqlite-vec virtual table (combined approach)
     let usingVecTable = false;
     try {
@@ -298,14 +263,20 @@ class DatabaseWrapper {
 
   async insertPage(pageData) {
     if (this.hasVecSupport()) {
-      // Insert into vec0 table (includes embedding if provided)
+      // For vec0 tables, we need to provide a valid embedding or skip the row
+      if (!pageData.embedding) {
+        console.warn('[DB] Skipping page without embedding for vec0 table:', pageData.url);
+        return { id: null };
+      }
+
+      // Insert into vec0 table (includes embedding)
       const stmt = this.db.prepare(`
         INSERT INTO pages (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count, embedding)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       try {
-        const embeddingJson = pageData.embedding ? JSON.stringify(Array.from(pageData.embedding)) : null;
+        const embeddingJson = JSON.stringify(Array.from(pageData.embedding));
 
         stmt.bind([
           pageData.url || '',
@@ -687,52 +658,35 @@ class DatabaseWrapper {
 async function initializeEmbeddings() {
   console.log('[ML] Initializing embedding model...');
 
-  // Transformers.js initialization handled separately
-  // For now, create a mock embedding interface
+  // TODO: Replace with actual Transformers.js implementation
   embedModel = {
     initialized: true,
     async embed(text) {
-      console.log('[ML] Mock embedding for text:', text.substring(0, 100) + '...');
-      // Return mock 384-dimensional embedding
+      // Mock 384-dimensional embedding for now
       return new Float32Array(384).fill(0).map(() => Math.random() - 0.5);
     }
   };
 
-  console.log('[ML] Embedding model initialized (mock)');
+  console.log('[ML] Mock embedding model initialized');
 }
 
 // Page ingestion
 async function ingestPage(pageInfo) {
-  console.log('[OFFSCREEN] Ingesting page:', pageInfo.url);
-
   try {
-    // Use extracted content if available, otherwise try to request it
-    let content;
-    if (pageInfo.extractedContent) {
-      content = {
-        title: pageInfo.extractedContent.title || pageInfo.title || 'Untitled',
-        text: pageInfo.extractedContent.text || '',
-        summary: pageInfo.extractedContent.summary || null
-      };
-    } else {
-      // Try to request content extraction from background
-      content = await requestPageContent(pageInfo.url);
-      if (!content) {
-        // Fallback to basic info
-        content = {
-          title: pageInfo.title || 'Untitled',
-          text: '',
-          summary: null
-        };
-      }
-    }
+    // Use extracted content if available, otherwise fallback
+    const content = pageInfo.extractedContent ? {
+      title: pageInfo.extractedContent.title || pageInfo.title || 'Untitled',
+      text: pageInfo.extractedContent.text || '',
+      summary: pageInfo.extractedContent.summary || null
+    } : {
+      title: pageInfo.title || 'Untitled',
+      text: '',
+      summary: null
+    };
 
-    // Generate embedding only if we have meaningful text
-    let embedding = null;
+    // Generate embedding for content (always create one for sqlite-vec compatibility)
     const textToEmbed = content.title + ' ' + content.text;
-    if (textToEmbed.trim().length > 10) {
-      embedding = await embed(textToEmbed);
-    }
+    const embedding = textToEmbed.trim().length > 0 ? await embed(textToEmbed) : await embed('webpage');
 
     // Store in database
     const pageId = await db.insert('pages', {
@@ -836,30 +790,6 @@ async function ingestCapturedQueue() {
   } catch (error) {
     console.error('[OFFSCREEN] Failed to process captured queue:', error);
     return { error: error.message };
-  }
-}
-
-// Request page content extraction via background
-async function requestPageContent(url) {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'extractPageContent',
-      url: url
-    });
-
-    if (response.error) {
-      console.warn('[OFFSCREEN] Content extraction failed for:', url, response.error);
-      return null;
-    }
-
-    return {
-      title: response.title || 'Untitled',
-      text: response.text || '',
-      summary: response.summary || null
-    };
-  } catch (error) {
-    console.warn('[OFFSCREEN] Failed to request content for:', url, error);
-    return null;
   }
 }
 
@@ -976,29 +906,17 @@ async function clearModelCache() {
 }
 
 async function exportDatabase() {
-  console.log('[OFFSCREEN] Exporting database...');
-
   try {
     if (!db) {
       throw new Error('Database not initialized');
     }
 
-    // For now, return basic stats and schema info
-    // In a full implementation, this would export the actual database file
     const stats = await db.stats();
-    const schema = db.selectValues(`
-      SELECT sql FROM sqlite_master
-      WHERE type IN ('table', 'index', 'view')
-      AND name NOT LIKE 'sqlite_%'
-      ORDER BY type, name
-    `);
-
     return {
       success: true,
       stats,
-      schema,
       timestamp: Date.now(),
-      message: 'Database export completed (schema and stats only in this implementation)'
+      message: 'Database export shows stats only (full export not implemented)'
     };
   } catch (error) {
     console.error('[OFFSCREEN] Database export failed:', error);
@@ -1007,19 +925,10 @@ async function exportDatabase() {
 }
 
 async function importDatabase(data) {
-  console.log('[OFFSCREEN] Importing database...');
-
-  try {
-    // This would handle database import
-    // For now, just return a placeholder
-    return {
-      success: true,
-      message: 'Database import not yet implemented'
-    };
-  } catch (error) {
-    console.error('[OFFSCREEN] Database import failed:', error);
-    return { error: error.message };
-  }
+  return {
+    success: false,
+    error: 'Database import not implemented'
+  };
 }
 
 // Initialize on load

@@ -84,6 +84,20 @@ Assumptions Going Forward
   - Offscreen legacy `globalThis.Summarizer` fallback marked with `TODO(ai-canary)`; consider removal if no longer needed in Canary.
   - Replace placeholder `quantize_config.json` with upstream version if required by future tooling.
 
+- 2025-09-23 — Remote Warm (optional)
+  - Added user toggle in Search → Advanced Options: "Use larger remote model (warm in background)" (`history_search.html/js`).
+  - Pref key: `aiPrefs.enableRemoteWarm` (boolean). Saved to `chrome.storage.local`.
+  - Offscreen:
+    - Local-first load of `Xenova/bge-small-en-v1.5-quantized`.
+    - If enabled, background warm-up of `Xenova/bge-small-en-v1.5` using Cache API and then hot-swap embedder.
+    - Status exposed via `chrome.runtime.sendMessage({ type: 'get-model-status' })` with fields: `{ using: 'local'|'remote', warming: boolean, lastError }`.
+    - Remote warm only for https (Cache API) and preserves no-cache behavior for chrome-extension URLs.
+  - UI shows model status under Advanced Options.
+
+- 2025-09-23 — Preference cleanup
+  - Removed redundant `allowCloudModel` flag from prefs and UI. Remote warm-up is controlled solely by `aiPrefs.enableRemoteWarm`.
+  - Offscreen enables remote downloads only during warm-up when that flag is on; otherwise model loading is strictly local.
+
 Key Gaps / Missing Pieces
 - Host-permissions onboarding in side panel — DONE
   - Implemented permission check for all-sites access and overlay button wiring.

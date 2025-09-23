@@ -76,6 +76,23 @@
 
       <!-- Chat Input -->
       <div class="chat-input-section">
+        <!-- Advanced Options Toggle -->
+        <button id="advancedToggleChat" class="advanced-toggle" style="align-self:flex-start;">
+          Advanced Options
+          <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <polyline points="6,9 12,15 18,9"></polyline>
+          </svg>
+        </button>
+
+        <!-- Advanced Options Panel -->
+        <div id="advancedPanelChat" class="advanced-panel hidden">
+          <div class="option-row" style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="toggleRemoteWarmChat" />
+            <label for="toggleRemoteWarmChat">Use larger remote model (warm in background)</label>
+          </div>
+          <div id="modelStatusChat" class="small-muted" style="margin-top:6px;color:#6b7280;"></div>
+        </div>
+
         <form id="chatForm" class="chat-form">
           <div class="chat-input-container">
             <textarea

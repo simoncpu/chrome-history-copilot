@@ -12,6 +12,10 @@ let chatLoading;
 let chatStatus;
 let statusText;
 let clearChatButton;
+let advancedToggleChat;
+let advancedPanelChat;
+let toggleRemoteWarmChat;
+let modelStatusChat;
 
 // State
 let isGenerating = false;
@@ -32,6 +36,10 @@ function initializeChatPage() {
   chatStatus = document.getElementById('chatStatus');
   statusText = document.getElementById('statusText');
   clearChatButton = document.getElementById('clearChat');
+  advancedToggleChat = document.getElementById('advancedToggleChat');
+  advancedPanelChat = document.getElementById('advancedPanelChat');
+  toggleRemoteWarmChat = document.getElementById('toggleRemoteWarmChat');
+  modelStatusChat = document.getElementById('modelStatusChat');
 
   if (!chatMessages || !chatInput) {
     console.error('[CHAT] Required DOM elements not found');
@@ -46,6 +54,11 @@ function initializeChatPage() {
 
   // Initialize AI session
   initializeAI();
+
+  // Load remote-warm prefs and status
+  loadChatPrefs();
+  updateModelStatusChat();
+  startModelWarmWatcherChat();
 
   // Load chat history
   loadChatHistory();
@@ -117,6 +130,40 @@ function setupEventListeners() {
   // Clear chat history
   if (clearChatButton) {
     clearChatButton.addEventListener('click', handleClearChat);
+  }
+
+  // Advanced toggle
+  if (advancedToggleChat) {
+    advancedToggleChat.addEventListener('click', () => {
+      const isHidden = advancedPanelChat.classList.contains('hidden');
+      if (isHidden) {
+        advancedPanelChat.classList.remove('hidden');
+        advancedToggleChat.classList.add('expanded');
+      } else {
+        advancedPanelChat.classList.add('hidden');
+        advancedToggleChat.classList.remove('expanded');
+      }
+    });
+  }
+
+  // Remote warm toggle
+  if (toggleRemoteWarmChat) {
+    toggleRemoteWarmChat.addEventListener('change', async (e) => {
+      try {
+        await saveAiPrefs({ enableRemoteWarm: !!e.target.checked });
+        if (e.target.checked && modelStatusChat) {
+          modelStatusChat.innerHTML = '<span class="inline-spinner"></span>Model: warming larger remote model… (using local)';
+        }
+        await chrome.runtime.sendMessage({ type: 'refresh-ai-prefs' });
+        if (e.target.checked) {
+          await chrome.runtime.sendMessage({ type: 'start-remote-warm' });
+        }
+        await updateModelStatusChat();
+        if (e.target.checked) startModelWarmWatcherChat();
+      } catch (err) {
+        console.warn('[CHAT] Failed to update remote warm pref:', err);
+      }
+    });
   }
 }
 
@@ -419,6 +466,70 @@ async function initializeAI() {
     console.warn('[CHAT] AI initialization failed:', error);
     statusText.textContent = 'AI not available';
   }
+}
+
+async function loadChatPrefs() {
+  try {
+    const result = await chrome.storage.local.get(['aiPrefs']);
+    if (toggleRemoteWarmChat) {
+      const pref = !!(result.aiPrefs && result.aiPrefs.enableRemoteWarm);
+      toggleRemoteWarmChat.checked = pref;
+    }
+  } catch (e) {
+    console.debug('[CHAT] Failed to load aiPrefs');
+  }
+}
+
+async function saveAiPrefs(partial) {
+  const store = await chrome.storage.local.get(['aiPrefs']);
+  const next = Object.assign({}, store.aiPrefs || {}, partial);
+  await chrome.storage.local.set({ aiPrefs: next });
+}
+
+async function updateModelStatusChat() {
+  if (!modelStatusChat) return;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
+    const ms = resp && resp.modelStatus ? resp.modelStatus : null;
+    if (!ms) { modelStatusChat.textContent = 'Model status: unavailable'; return; }
+    if (ms.warming) {
+      modelStatusChat.innerHTML = '<span class="inline-spinner"></span>Model: warming larger remote model… (using local)';
+    } else if (ms.using === 'remote') {
+      modelStatusChat.textContent = 'Model: Remote (large)';
+    } else {
+      modelStatusChat.textContent = 'Model: Local (quantized)';
+    }
+    if (ms.lastError) {
+      modelStatusChat.textContent += ` — warm-up failed: ${ms.lastError}`;
+    }
+  } catch (e) {
+    modelStatusChat.textContent = 'Model status: error retrieving';
+  }
+}
+
+let modelWarmWatcherChat = null;
+function startModelWarmWatcherChat(timeoutMs = 120000) {
+  if (!modelStatusChat) return;
+  if (modelWarmWatcherChat) return;
+  const started = Date.now();
+  modelWarmWatcherChat = setInterval(async () => {
+    await updateModelStatusChat();
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
+      const ms = resp && resp.modelStatus ? resp.modelStatus : null;
+      if (!ms || !ms.warming || ms.using === 'remote') {
+        clearInterval(modelWarmWatcherChat);
+        modelWarmWatcherChat = null;
+      }
+      if (Date.now() - started > timeoutMs) {
+        clearInterval(modelWarmWatcherChat);
+        modelWarmWatcherChat = null;
+      }
+    } catch {
+      clearInterval(modelWarmWatcherChat);
+      modelWarmWatcherChat = null;
+    }
+  }, 2000);
 }
 
 // Chat history persistence

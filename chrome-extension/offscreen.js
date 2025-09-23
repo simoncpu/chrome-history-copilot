@@ -9,8 +9,13 @@
 let db = null;
 let embedModel = null;
 let embedder = null; // Transformers.js pipeline
+let modelStatus = {
+  using: 'local', // 'local' | 'remote'
+  warming: false,
+  lastError: null
+};
 let isInitialized = false;
-let aiPrefs = { enableReranker: false, allowCloudModel: true };
+let aiPrefs = { enableReranker: false, enableRemoteWarm: false };
 
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -106,6 +111,10 @@ async function handleMessage(message, sendResponse) {
 
       case 'refresh-ai-prefs':
         await refreshAiPrefs();
+        // If remote warm is enabled, attempt warm-up in background
+        if (aiPrefs.enableRemoteWarm) {
+          try { startRemoteWarm(); } catch {}
+        }
         sendResponse({ status: 'ok', aiPrefs });
         break;
 
@@ -113,7 +122,23 @@ async function handleMessage(message, sendResponse) {
         try {
           await refreshAiPrefs();
           await initializeEmbeddings();
+          if (aiPrefs.enableRemoteWarm) {
+            try { startRemoteWarm(); } catch {}
+          }
           sendResponse({ status: 'reloaded' });
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
+        break;
+
+      case 'get-model-status':
+        sendResponse({ status: 'ok', modelStatus });
+        break;
+
+      case 'start-remote-warm':
+        try {
+          startRemoteWarm();
+          sendResponse({ status: 'ok' });
         } catch (e) {
           sendResponse({ error: e.message });
         }
@@ -141,6 +166,9 @@ async function initialize() {
 
     // Initialize embedding model
     await initializeEmbeddings();
+    if (aiPrefs.enableRemoteWarm) {
+      try { startRemoteWarm(); } catch {}
+    }
 
     isInitialized = true;
   } catch (error) {
@@ -155,7 +183,7 @@ async function refreshAiPrefs() {
     if (stored && stored.aiPrefs && typeof stored.aiPrefs === 'object') {
       aiPrefs = {
         enableReranker: !!stored.aiPrefs.enableReranker,
-        allowCloudModel: stored.aiPrefs.allowCloudModel !== false
+        enableRemoteWarm: !!stored.aiPrefs.enableRemoteWarm
       };
     }
   } catch (e) {
@@ -656,7 +684,7 @@ class DatabaseWrapper {
 
 // Embeddings initialization
 async function initializeEmbeddings() {
-  // Initialize embedding model (Transformers.js), assume bundled local model
+  // Initialize embedding model (Transformers.js), local-first
   const mod = await import(chrome.runtime.getURL('lib/transformers.min.js'));
   const env = mod.env;
   // Configure ONNX runtime for MV3 extension constraints
@@ -665,14 +693,15 @@ async function initializeEmbeddings() {
   env.backends.onnx.wasm.simd = false;
   env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/');
   if (typeof env.allowLocalModels !== 'undefined') env.allowLocalModels = true;
-  if (typeof env.allowRemoteModels !== 'undefined') env.allowRemoteModels = false;
+  if (typeof env.allowRemoteModels !== 'undefined') env.allowRemoteModels = false; // default: local only
   if (typeof env.localModelPath !== 'undefined') env.localModelPath = chrome.runtime.getURL('lib/models/');
-  // Avoid using Cache API with chrome-extension:// URLs to prevent errors
+  // Avoid using Cache API with chrome-extension:// URLs to prevent errors; enable only during remote warm
   if (typeof env.useBrowserCache !== 'undefined') env.useBrowserCache = false;
 
   const { pipeline } = mod;
-  // Assumes bge-small-en-v1.5-quantized is bundled with the extension
-  embedder = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5-quantized');
+  // Start with the bundled small quantized model
+  const LOCAL_SMALL = 'Xenova/bge-small-en-v1.5-quantized';
+  embedder = await pipeline('feature-extraction', LOCAL_SMALL);
 
   embedModel = {
     initialized: true,
@@ -683,6 +712,7 @@ async function initializeEmbeddings() {
       return data instanceof Float32Array ? data : new Float32Array(data);
     }
   };
+  modelStatus = { using: 'local', warming: false, lastError: null };
 }
 
 // Page ingestion
@@ -955,6 +985,62 @@ async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 })
     console.error('[OFFSCREEN] Search failed:', error);
     return { error: error.message };
   }
+}
+
+// Remote warm-up: prefetch larger remote model and hot-swap when ready
+async function warmRemoteModel() {
+  const { pipeline, env } = await import(chrome.runtime.getURL('lib/transformers.min.js'));
+  const REMOTE_MODEL = 'Xenova/bge-small-en-v1.5'; // 384-dim output; compatible with vec0 schema
+
+  const prevCache = env.useBrowserCache;
+  const prevRemote = env.allowRemoteModels;
+  const prevLocal = env.allowLocalModels;
+  try {
+    env.allowRemoteModels = true;
+    env.allowLocalModels = false; // force remote resolution for the warm model
+    env.useBrowserCache = true; // enable Cache API for https fetches
+    modelStatus.warming = true;
+    modelStatus.lastError = null;
+
+    const warm = await pipeline('feature-extraction', REMOTE_MODEL);
+
+    // Optionally verify output dim ~384 by running a tiny embedding
+    try {
+      const testOut = await warm('warmup test', { pooling: 'mean', normalize: true });
+      const dim = (testOut?.data || testOut)?.length || 0;
+      if (dim && dim !== 384) {
+        throw new Error(`Incompatible embedding dimension: ${dim}`);
+      }
+    } catch (e) {
+      throw e;
+    }
+
+    // Hot-swap
+    embedder = warm;
+    embedModel = {
+      initialized: true,
+      async embed(text) {
+        const str = typeof text === 'string' ? text : String(text || '');
+        const out = await embedder(str, { pooling: 'mean', normalize: true });
+        const data = out?.data || out;
+        return data instanceof Float32Array ? data : new Float32Array(data);
+      }
+    };
+    modelStatus.using = 'remote';
+  } catch (e) {
+    modelStatus.lastError = String(e?.message || e);
+  } finally {
+    modelStatus.warming = false;
+    // Restore cache policy for extension URLs
+    env.useBrowserCache = prevCache;
+    env.allowRemoteModels = prevRemote;
+    env.allowLocalModels = prevLocal;
+  }
+}
+
+function startRemoteWarm() {
+  if (modelStatus.using === 'remote' || modelStatus.warming) return;
+  try { void warmRemoteModel(); } catch {}
 }
 
 // Embedding function

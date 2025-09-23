@@ -487,6 +487,23 @@ body {
   overflow: hidden;
 }
 
+/* Inline spinner for model warm-up */
+.inline-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ai-spin 1s linear infinite;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
+@keyframes ai-spin {
+  to { transform: rotate(360deg); }
+}
+
 .load-more-button {
   margin-top: 16px;
   padding: 12px 24px;

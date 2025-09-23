@@ -128,7 +128,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Define messages that should be forwarded to offscreen document
   const offscreenMessages = [
     'ingest-page', 'search', 'embed', 'clear-db', 'get-stats',
-    'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary'
+    'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary',
+    'refresh-ai-prefs', 'reload-embeddings', 'get-model-status', 'start-remote-warm'
   ];
 
   if (offscreenMessages.includes(message.type)) {

@@ -15,6 +15,8 @@ let emptyState;
 let errorState;
 let resultsList;
 let loadMoreButton;
+let toggleRemoteWarm;
+let modelStatusEl;
 
 // State
 let currentQuery = '';
@@ -40,6 +42,8 @@ function initializeSearchPage() {
   errorState = document.getElementById('errorState');
   resultsList = document.getElementById('resultsList');
   loadMoreButton = document.getElementById('loadMoreButton');
+  toggleRemoteWarm = document.getElementById('toggleRemoteWarm');
+  modelStatusEl = document.getElementById('modelStatus');
 
   if (!searchInput) {
     console.error('[SEARCH] Required DOM elements not found');
@@ -51,6 +55,10 @@ function initializeSearchPage() {
 
   // Load saved preferences
   loadUserPreferences();
+
+  // Query model status on load
+  updateModelStatus();
+  startModelWarmWatcher();
 
   // Set up tab navigation
   setupTabNavigation();
@@ -120,6 +128,28 @@ function setupEventListeners() {
 
   // Advanced options toggle
   advancedToggle.addEventListener('click', toggleAdvancedPanel);
+
+  // Remote warm toggle
+  if (toggleRemoteWarm) {
+    toggleRemoteWarm.addEventListener('change', async (e) => {
+      try {
+        await saveAiPrefs({ enableRemoteWarm: !!e.target.checked });
+        // Show warming spinner immediately for snappy UX
+        if (e.target.checked && modelStatusEl) {
+          modelStatusEl.innerHTML = '<span class="inline-spinner"></span>Model: warming larger remote model… (using local)';
+        }
+        await chrome.runtime.sendMessage({ type: 'refresh-ai-prefs' });
+        if (e.target.checked) {
+          // Also explicitly request warm-up
+          await chrome.runtime.sendMessage({ type: 'start-remote-warm' });
+        }
+        await updateModelStatus();
+        if (e.target.checked) startModelWarmWatcher();
+      } catch (err) {
+        console.warn('[SEARCH] Failed to update remote warm pref:', err);
+      }
+    });
+  }
 
   // Search mode change
   searchMode.addEventListener('change', handleSearchModeChange);
@@ -391,10 +421,15 @@ function getFaviconUrl(url, domain) {
 // User preferences
 async function loadUserPreferences() {
   try {
-    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage']);
+    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs']);
 
     if (result.searchMode) {
       searchMode.value = result.searchMode;
+    }
+
+    if (toggleRemoteWarm) {
+      const pref = !!(result.aiPrefs && result.aiPrefs.enableRemoteWarm);
+      toggleRemoteWarm.checked = pref;
     }
 
   } catch (error) {
@@ -411,6 +446,61 @@ async function saveUserPreferences() {
   } catch (error) {
     console.error('[SEARCH] Failed to save preferences:', error);
   }
+}
+
+async function saveAiPrefs(partial) {
+  const store = await chrome.storage.local.get(['aiPrefs']);
+  const next = Object.assign({}, store.aiPrefs || {}, partial);
+  await chrome.storage.local.set({ aiPrefs: next });
+}
+
+async function updateModelStatus() {
+  if (!modelStatusEl) return;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
+    const ms = resp && resp.modelStatus ? resp.modelStatus : null;
+    if (!ms) {
+      modelStatusEl.textContent = 'Model status: unavailable';
+      return;
+    }
+    if (ms.warming) {
+      modelStatusEl.innerHTML = '<span class="inline-spinner"></span>Model: warming larger remote model… (using local)';
+    } else if (ms.using === 'remote') {
+      modelStatusEl.textContent = 'Model: Remote (large)';
+    } else {
+      modelStatusEl.textContent = 'Model: Local (quantized)';
+    }
+    if (ms.lastError) {
+      modelStatusEl.textContent += ` — warm-up failed: ${ms.lastError}`;
+    }
+  } catch (e) {
+    modelStatusEl.textContent = 'Model status: error retrieving';
+  }
+}
+
+let modelWarmWatcher = null;
+function startModelWarmWatcher(timeoutMs = 120000) {
+  if (!modelStatusEl) return;
+  if (modelWarmWatcher) return;
+  const started = Date.now();
+  modelWarmWatcher = setInterval(async () => {
+    await updateModelStatus();
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
+      const ms = resp && resp.modelStatus ? resp.modelStatus : null;
+      if (!ms || !ms.warming || ms.using === 'remote') {
+        clearInterval(modelWarmWatcher);
+        modelWarmWatcher = null;
+      }
+      if (Date.now() - started > timeoutMs) {
+        clearInterval(modelWarmWatcher);
+        modelWarmWatcher = null;
+      }
+    } catch {
+      clearInterval(modelWarmWatcher);
+      modelWarmWatcher = null;
+    }
+  }, 2000);
 }
 
 // Export for debugging

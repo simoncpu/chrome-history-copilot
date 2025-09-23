@@ -120,8 +120,11 @@ function initializeDOMElements() {
   analysisContent = document.getElementById('analysisContent');
 
   // Preferences
-  toggleAllowCloudModel = document.getElementById('toggleAllowCloudModel');
+  // Removed allowCloudModel toggle (redundant)
   toggleEnableReranker = document.getElementById('toggleEnableReranker');
+  toggleEnableRemoteWarm = document.getElementById('toggleEnableRemoteWarm');
+  modelStatusDebug = document.getElementById('modelStatusDebug');
+  refreshModelStatusBtn = document.getElementById('refreshModelStatus');
   savePrefs = document.getElementById('savePrefs');
   reloadEmbeddings = document.getElementById('reloadEmbeddings');
   // Permissions
@@ -160,6 +163,7 @@ function setupEventListeners() {
   // Preferences
   if (savePrefs) savePrefs.addEventListener('click', handleSavePrefs);
   if (reloadEmbeddings) reloadEmbeddings.addEventListener('click', handleReloadEmbeddings);
+  if (refreshModelStatusBtn) refreshModelStatusBtn.addEventListener('click', updateModelStatusDebug);
   // Permissions
   if (grantAllSitesAccessBtn) grantAllSitesAccessBtn.addEventListener('click', handleGrantAllSitesAccess);
   if (grantCurrentSiteAccessBtn) grantCurrentSiteAccessBtn.addEventListener('click', handleGrantCurrentSiteAccess);
@@ -216,9 +220,11 @@ function handleOpenExtensionSettings() {
 async function loadPreferences() {
   try {
     const store = await chrome.storage.local.get(['aiPrefs']);
-    const prefs = store.aiPrefs || { allowCloudModel: true, enableReranker: false };
-    if (toggleAllowCloudModel) toggleAllowCloudModel.checked = prefs.allowCloudModel !== false;
+    const prefs = store.aiPrefs || { enableReranker: false, enableRemoteWarm: false };
     if (toggleEnableReranker) toggleEnableReranker.checked = !!prefs.enableReranker;
+    if (toggleEnableRemoteWarm) toggleEnableRemoteWarm.checked = !!prefs.enableRemoteWarm;
+    // Also refresh model status
+    updateModelStatusDebug();
   } catch (e) {
     log('Failed to load preferences', 'warn');
   }
@@ -226,13 +232,14 @@ async function loadPreferences() {
 
 async function handleSavePrefs() {
   const prefs = {
-    allowCloudModel: toggleAllowCloudModel ? toggleAllowCloudModel.checked : true,
-    enableReranker: toggleEnableReranker ? toggleEnableReranker.checked : false
+    enableReranker: toggleEnableReranker ? toggleEnableReranker.checked : false,
+    enableRemoteWarm: toggleEnableRemoteWarm ? toggleEnableRemoteWarm.checked : false
   };
   try {
     await chrome.storage.local.set({ aiPrefs: prefs });
     log('Preferences saved', 'info');
     await chrome.runtime.sendMessage({ type: 'refresh-ai-prefs' });
+    await updateModelStatusDebug();
   } catch (e) {
     log(`Failed to save preferences: ${e.message}`, 'error');
   }
@@ -317,6 +324,28 @@ async function refreshStatistics() {
   } catch (error) {
     console.error('[DEBUG] Failed to refresh statistics:', error);
     log(`Failed to refresh statistics: ${error.message}`, 'error');
+  }
+}
+
+// Model status
+async function updateModelStatusDebug() {
+  if (!modelStatusDebug) return;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
+    const ms = resp && resp.modelStatus ? resp.modelStatus : null;
+    if (!ms) { modelStatusDebug.textContent = 'Model: unavailable'; return; }
+    if (ms.warming) {
+      modelStatusDebug.textContent = 'Model: warming larger remote model… (using local)';
+    } else if (ms.using === 'remote') {
+      modelStatusDebug.textContent = 'Model: Remote (large)';
+    } else {
+      modelStatusDebug.textContent = 'Model: Local (quantized)';
+    }
+    if (ms.lastError) {
+      modelStatusDebug.textContent += ` — warm-up failed: ${ms.lastError}`;
+    }
+  } catch (e) {
+    modelStatusDebug.textContent = 'Model: error retrieving status';
   }
 }
 

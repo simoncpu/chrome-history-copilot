@@ -363,12 +363,16 @@
       <div class="grid">
         <div>
           <div class="checkbox-container">
-            <input type="checkbox" id="toggleAllowCloudModel" class="checkbox">
-            <label for="toggleAllowCloudModel">Allow model downloads (Hugging Face/CDN)</label>
-          </div>
-          <div class="checkbox-container">
             <input type="checkbox" id="toggleEnableReranker" class="checkbox">
             <label for="toggleEnableReranker">Enable cross-encoder reranker (if available)</label>
+          </div>
+          <div class="checkbox-container">
+            <input type="checkbox" id="toggleEnableRemoteWarm" class="checkbox">
+            <label for="toggleEnableRemoteWarm">Use larger remote model (warm in background)</label>
+          </div>
+          <div style="margin-left: 24px; color:#64748b; font-size: 13px;">
+            <span id="modelStatusDebug">Model: -</span>
+            <button id="refreshModelStatus" class="button button-secondary" style="margin-left:8px; padding:6px 10px;">Refresh</button>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
             <button id="savePrefs" class="button button-primary">Save Preferences</button>

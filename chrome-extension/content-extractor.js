@@ -59,8 +59,8 @@
       }
 
       const summarizer = await window.ai.summarizer.create({
-        type: 'key-points',
-        length: 'medium',
+        type: 'tldr',
+        length: 'long',
         format: 'plain-text',
         language: 'en',
         outputLanguage: 'en'
@@ -134,7 +134,7 @@
             // Store a bounded amount of text to keep storage reasonable
             text: text.length > 200000 ? text.slice(0, 200000) + '...' : text,
             summary: summary || null,
-            summaryType: summary ? 'key-points' : null,
+            summaryType: summary ? 'tldr' : null,
             aiModel: summary ? 'chrome-ai-summarizer' : null,
             generatedAt: new Date().toISOString(),
             timestamp: Date.now()

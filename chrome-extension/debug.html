@@ -346,10 +346,7 @@
           <div class="stat-value" id="embeddingCount">-</div>
           <div class="stat-label">Embeddings</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value" id="dbSize">-</div>
-          <div class="stat-label">Database Size</div>
-        </div>
+        
         <div class="stat-card">
           <div class="stat-value">
             <span class="status-indicator" id="statusIndicator"></span>
@@ -434,16 +431,9 @@
           <button id="refreshStats" class="button button-primary" style="width: 100%; margin: 4px 0;">
             🔄 Refresh Statistics
           </button>
-          <button id="exportDb" class="button button-secondary" style="width: 100%; margin: 4px 0;">
-            📁 Export Database
-          </button>
         </div>
 
         <div style="flex: 1; min-width: 200px;">
-          <label for="importFile" class="file-label" style="width: 100%; margin: 4px 0; justify-content: center;">
-            📂 Import Database
-            <input type="file" id="importFile" class="file-input" accept=".db,.sqlite,.sql">
-          </label>
           <button id="clearModelCache" class="button button-secondary" style="width: 100%; margin: 4px 0;">
             🧹 Clear Model Cache
           </button>

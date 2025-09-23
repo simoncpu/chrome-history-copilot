@@ -1,0 +1,5 @@
+{
+  "do_lower_case": true,
+  "max_length": 512,
+  "padding_side": "right"
+}

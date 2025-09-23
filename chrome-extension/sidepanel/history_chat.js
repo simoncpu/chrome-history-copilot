@@ -11,6 +11,7 @@ let sendButton;
 let chatLoading;
 let chatStatus;
 let statusText;
+let clearChatButton;
 
 // State
 let isGenerating = false;
@@ -30,6 +31,7 @@ function initializeChatPage() {
   chatLoading = document.getElementById('chatLoading');
   chatStatus = document.getElementById('chatStatus');
   statusText = document.getElementById('statusText');
+  clearChatButton = document.getElementById('clearChat');
 
   if (!chatMessages || !chatInput) {
     console.error('[CHAT] Required DOM elements not found');
@@ -48,11 +50,59 @@ function initializeChatPage() {
   // Load chat history
   loadChatHistory();
 
+  // Host-permissions onboarding
+  setupPermissionsOnboarding();
   
 }
 
 // Note: Site access is optional; UI initializes regardless. The debug page
 // and background fallback will request optional host permissions if needed.
+
+async function setupPermissionsOnboarding() {
+  const overlay = document.getElementById('permissionOverlay');
+  const grantAllBtn = document.getElementById('grantAllSites');
+  const openSettingsBtn = document.getElementById('openExtSettings');
+
+  if (!overlay) return;
+
+  const checkAllSitesGranted = async () => {
+    try {
+      // Treat either https or http all-sites as sufficient to hide the overlay
+      const hasHttps = await chrome.permissions.contains({ origins: ['https://*/*'] });
+      if (hasHttps) return true;
+      const hasHttp = await chrome.permissions.contains({ origins: ['http://*/*'] });
+      return !!hasHttp;
+    } catch (_) {
+      return true; // fail-closed (don’t block UI)
+    }
+  };
+
+  const maybeShowOverlay = async () => {
+    const has = await checkAllSitesGranted();
+    if (!has) overlay.classList.remove('hidden');
+    else overlay.classList.add('hidden');
+  };
+
+  if (grantAllBtn) {
+    grantAllBtn.addEventListener('click', async () => {
+      try {
+        let granted = await chrome.permissions.request({ origins: ['https://*/*'] });
+        if (!granted) {
+          granted = await chrome.permissions.request({ origins: ['http://*/*'] });
+        }
+        if (granted) overlay.classList.add('hidden');
+      } catch (_) {}
+    });
+  }
+
+  if (openSettingsBtn) {
+    openSettingsBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+    });
+  }
+
+  await maybeShowOverlay();
+}
 
 function setupEventListeners() {
   // Chat form submission
@@ -63,6 +113,11 @@ function setupEventListeners() {
 
   // Prevent default on enter if shift is not pressed
   chatInput.addEventListener('keydown', handleInputKeydown);
+
+  // Clear chat history
+  if (clearChatButton) {
+    clearChatButton.addEventListener('click', handleClearChat);
+  }
 }
 
 function setupTabNavigation() {
@@ -110,6 +165,8 @@ async function handleChatSubmit(e) {
 
   // Start generating response
   await generateResponse(message);
+  // Ensure view stays at latest after response
+  scrollToBottom();
 }
 
 function addUserMessage(message) {
@@ -187,20 +244,9 @@ async function searchHistory(query) {
 }
 
 async function generateAIResponse(userMessage, searchResults) {
-  
-
-  // Try to use Chrome AI API
-  try {
-    const caps = await aiBridge.initialize();
-    if (await aiBridge.isLanguageModelAvailable()) {
-      return await generateWithChromeAI(userMessage, searchResults);
-    }
-  } catch (error) {
-    console.warn('[CHAT] Chrome AI not available:', error);
-  }
-
-  // Fallback to structured response
-  return generateStructuredResponse(userMessage, searchResults);
+  // Strict: require Chrome AI to be available
+  await aiBridge.initialize();
+  return await generateWithChromeAI(userMessage, searchResults);
 }
 
 async function generateWithChromeAI(userMessage, searchResults) {
@@ -216,29 +262,6 @@ async function generateWithChromeAI(userMessage, searchResults) {
 
   // Generate response via bridge
   const response = await aiBridge.generateResponse(userMessage, combinedContext);
-  return response;
-}
-
-function generateStructuredResponse(userMessage, searchResults) {
-  if (searchResults.length === 0) {
-    return `I couldn't find any relevant pages in your browsing history for "${userMessage}". Try searching with different keywords or check if you've visited pages related to this topic.`;
-  }
-
-  let response = `Here's what I found in your browsing history related to "${userMessage}":\n\n`;
-
-  searchResults.slice(0, 5).forEach((result, index) => {
-    response += `${index + 1}. **${result.title}**\n`;
-    response += `   ${result.url}\n`;
-    if (result.summary || result.snippet) {
-      response += `   ${(result.summary || result.snippet).substring(0, 100)}...\n`;
-    }
-    response += '\n';
-  });
-
-  if (searchResults.length > 5) {
-    response += `... and ${searchResults.length - 5} more results.`;
-  }
-
   return response;
 }
 
@@ -288,7 +311,7 @@ function addAssistantMessage(content, searchResults = []) {
       <div class="message-links">
         ${searchResults.slice(0, 5).map(result => `
           <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
-            <img src="${result.favicon_url || `chrome://favicon/${result.url}`}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
+            <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
             <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
           </a>
         `).join('')}
@@ -370,8 +393,14 @@ function updateUI() {
   }
 }
 
-function scrollToBottom() {
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+function scrollToBottom(retries = 2) {
+  if (!chatMessages) return;
+  requestAnimationFrame(() => {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    if (retries > 0) {
+      setTimeout(() => scrollToBottom(retries - 1), 50);
+    }
+  });
 }
 
 // AI initialization
@@ -384,11 +413,11 @@ async function initializeAI() {
     } else if (caps?.languageModel) {
       statusText.textContent = 'AI initializing...';
     } else {
-      statusText.textContent = 'AI not available - using fallback';
+      statusText.textContent = 'AI not available';
     }
   } catch (error) {
     console.warn('[CHAT] AI initialization failed:', error);
-    statusText.textContent = 'Using structured responses';
+    statusText.textContent = 'AI not available';
   }
 }
 
@@ -412,6 +441,9 @@ async function loadChatHistory() {
       // Update storage preference
       await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
     }
+
+    // Ensure we start scrolled to bottom when opening chat
+    scrollToBottom();
   } catch (error) {
     console.error('[CHAT] Failed to load chat history:', error);
   }
@@ -439,11 +471,34 @@ function addUserMessageFromHistory(content) {
   `;
 
   // Insert before the welcome message
-  const welcomeMessage = chatMessages.querySelector('.assistant-message');
+  const welcomeMessage = chatMessages.querySelector('#welcomeMessage');
   if (welcomeMessage) {
     chatMessages.insertBefore(messageDiv, welcomeMessage);
   } else {
     chatMessages.appendChild(messageDiv);
+  }
+}
+
+async function handleClearChat() {
+  try {
+    // Clear state and storage
+    chatHistory = [];
+    await chrome.storage.local.set({ chatHistory: [] });
+
+    // Remove all messages except the welcome message
+    const children = Array.from(chatMessages.children);
+    children.forEach((node) => {
+      if (!(node.id === 'welcomeMessage')) {
+        chatMessages.removeChild(node);
+      }
+    });
+
+    // Reset UI state
+    isGenerating = false;
+    updateUI();
+    scrollToBottom();
+  } catch (e) {
+    console.error('[CHAT] Failed to clear chat:', e);
   }
 }
 
@@ -452,6 +507,15 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function getFaviconUrl(url, domain) {
+  try {
+    const host = domain || new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?sz=16&domain=${encodeURIComponent(host)}`;
+  } catch (_) {
+    return 'https://www.google.com/s2/favicons?sz=16&domain=example.com';
+  }
 }
 
 // Export for debugging

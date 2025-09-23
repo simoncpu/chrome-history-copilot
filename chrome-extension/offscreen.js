@@ -216,7 +216,7 @@ class DatabaseWrapper {
     this.db = sqliteDb;
     this.sqlite3 = sqlite3;
     this.initialized = true;
-    this._vecSupport = null; // Cache vec support detection
+    this._vecSupport = true; // Assume vec support is always available
   }
 
   updateSummaryByUrl(url, summary) {
@@ -240,83 +240,32 @@ class DatabaseWrapper {
   }
 
   async initializeSchema() {
-    // Create main pages table using sqlite-vec virtual table (combined approach)
-    let usingVecTable = false;
-    try {
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS pages USING vec0(
-          id INTEGER PRIMARY KEY,
-          url TEXT,
-          domain TEXT,
-          title TEXT,
-          content_text TEXT,
-          summary TEXT,
-          favicon_url TEXT,
-          first_visit_at INTEGER,
-          last_visit_at INTEGER,
-          visit_count INTEGER,
-          embedding FLOAT[384]
-        )
-      `);
-      usingVecTable = true;
-    } catch (vecError) {
-      console.warn('[DB] sqlite-vec not available, falling back to regular table:', vecError);
-      // Fallback to regular table
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS pages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          url TEXT UNIQUE NOT NULL,
-          domain TEXT NOT NULL,
-          title TEXT,
-          content_text TEXT,
-          summary TEXT,
-          favicon_url TEXT,
-          first_visit_at INTEGER NOT NULL,
-          last_visit_at INTEGER NOT NULL,
-          visit_count INTEGER NOT NULL DEFAULT 1
-        )
-      `);
+    // Assume sqlite-vec and FTS5 are always available
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS pages USING vec0(
+        id INTEGER PRIMARY KEY,
+        url TEXT,
+        domain TEXT,
+        title TEXT,
+        content_text TEXT,
+        summary TEXT,
+        favicon_url TEXT,
+        first_visit_at INTEGER,
+        last_visit_at INTEGER,
+        visit_count INTEGER,
+        embedding FLOAT[384]
+      )
+    `);
 
-      // Separate embeddings table for fallback
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS page_embeddings (
-          id INTEGER PRIMARY KEY REFERENCES pages(id) ON DELETE CASCADE,
-          embedding BLOB NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `);
-      usingVecTable = false;
-    }
+    this._isVecTable = true;
 
-    // Store the table type for later use
-    this._isVecTable = usingVecTable;
-
-    // Create FTS5 virtual table for full-text search
-    try {
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-          id UNINDEXED,
-          title,
-          content_text
-        )
-      `);
-    } catch (ftsError) {
-      console.warn('[DB] FTS5 not available, search will use fallback methods:', ftsError);
-    }
-
-    // Create indexes only for regular tables (not virtual tables)
-    if (!usingVecTable) {
-      try {
-        this.db.exec(`
-          CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
-          CREATE INDEX IF NOT EXISTS idx_pages_last_visit ON pages(last_visit_at);
-          CREATE INDEX IF NOT EXISTS idx_pages_visit_count ON pages(visit_count);
-          CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON page_embeddings(updated_at);
-        `);
-      } catch (indexError) {
-        console.warn('[DB] Could not create indexes:', indexError);
-      }
-    }
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+        id UNINDEXED,
+        title,
+        content_text
+      )
+    `);
   }
 
   async insert(table, data) {
@@ -444,133 +393,8 @@ class DatabaseWrapper {
         }
       }
     } else {
-      // Fallback to regular table
-      try {
-        // Check existing by URL
-        let existingId = null;
-        let existingVisitCount = 0;
-        let existingLastVisit = null;
-        const checkStmt = this.db.prepare('SELECT id, visit_count, last_visit_at FROM pages WHERE url = ? LIMIT 1');
-        checkStmt.bind([pageData.url]);
-        if (checkStmt.step()) {
-          existingId = checkStmt.get(0);
-          existingVisitCount = Number(checkStmt.get(1)) || 0;
-          existingLastVisit = Number(checkStmt.get(2)) || pageData.last_visit_at;
-        }
-        checkStmt.finalize();
-
-        if (existingId) {
-          // Update existing
-          const newVisit = existingVisitCount + 1;
-          const upd = this.db.prepare(`
-            UPDATE pages
-            SET domain = ?, title = ?, content_text = ?, summary = ?, favicon_url = ?,
-                last_visit_at = ?, visit_count = ?
-            WHERE id = ?
-          `);
-          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
-          // silent
-          upd.bind([
-            pageData.domain,
-            pageData.title,
-            pageData.content_text,
-            normalizedSummary,
-            pageData.favicon_url || null,
-            Math.max(existingLastVisit || 0, pageData.last_visit_at || 0),
-            newVisit,
-            existingId
-          ]);
-          upd.step();
-          upd.finalize();
-
-          // FTS update
-          try {
-            const ftsStmt = this.db.prepare(`
-              INSERT OR REPLACE INTO pages_fts(rowid, title, content_text)
-              VALUES (?, ?, ?)
-            `);
-            ftsStmt.bind([existingId, pageData.title, pageData.content_text]);
-            ftsStmt.step();
-            ftsStmt.finalize();
-          } catch (ftsError) {
-            console.warn('[DB] FTS5 update failed:', ftsError);
-          }
-
-          // Embedding upsert
-          if (pageData.embedding) {
-            try {
-              const embStmt = this.db.prepare(`
-                INSERT OR REPLACE INTO page_embeddings (id, embedding, updated_at)
-                VALUES (?, ?, ?)
-              `);
-              const embeddingBlob = new Uint8Array(pageData.embedding.buffer);
-              embStmt.bind([existingId, embeddingBlob, Date.now()]);
-              embStmt.step();
-              embStmt.finalize();
-            } catch (embError) {
-              console.warn('[DB] Embedding storage failed:', embError);
-            }
-          }
-
-          return { id: existingId };
-        } else {
-          // Insert new
-          const stmt = this.db.prepare(`
-            INSERT INTO pages
-            (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : null;
-          // silent
-          stmt.bind([
-            pageData.url,
-            pageData.domain,
-            pageData.title,
-            pageData.content_text,
-            normalizedSummary,
-            pageData.favicon_url || null,
-            pageData.first_visit_at,
-            pageData.last_visit_at,
-            pageData.visit_count
-          ]);
-          stmt.step();
-          stmt.finalize();
-          const insertedId = this.db.selectValue('SELECT last_insert_rowid()');
-
-          // FTS sync
-          try {
-            const ftsStmt = this.db.prepare(`
-              INSERT OR REPLACE INTO pages_fts(rowid, title, content_text)
-              VALUES (?, ?, ?)
-            `);
-            ftsStmt.bind([insertedId, pageData.title, pageData.content_text]);
-            ftsStmt.step();
-            ftsStmt.finalize();
-          } catch (ftsError) {
-            console.warn('[DB] FTS5 update failed:', ftsError);
-          }
-
-          // Embedding store
-          if (pageData.embedding) {
-            try {
-              const embStmt = this.db.prepare(`
-                INSERT OR REPLACE INTO page_embeddings (id, embedding, updated_at)
-                VALUES (?, ?, ?)
-              `);
-              const embeddingBlob = new Uint8Array(pageData.embedding.buffer);
-              embStmt.bind([insertedId, embeddingBlob, Date.now()]);
-              embStmt.step();
-              embStmt.finalize();
-            } catch (embError) {
-              console.warn('[DB] Embedding storage failed:', embError);
-            }
-          }
-
-          return { id: insertedId };
-        }
-      } catch (error) {
-        throw error;
-      }
+      // Unreachable: vec support is assumed always available
+      throw new Error('vec0 support required');
     }
   }
 
@@ -594,140 +418,73 @@ class DatabaseWrapper {
   }
 
   async textSearch(query, limit, offset = 0) {
-    // Try FTS5 first, fallback to LIKE
-    try {
-      const stmt = this.db.prepare(`
-        SELECT p.*, bm25(pages_fts) AS bm25_score,
-               snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
-        FROM pages_fts
-        JOIN pages p ON p.id = pages_fts.id
-        WHERE pages_fts MATCH ?
-        ORDER BY bm25_score
-        LIMIT ? OFFSET ?
-      `);
+    // Assume FTS5 is available; use bm25
+    const colNames = ['id','url','domain','title','content_text','summary','favicon_url','first_visit_at','last_visit_at','visit_count','bm25_score','snippet'];
+    const stmt = this.db.prepare(`
+      SELECT 
+        p.id, p.url, p.domain, p.title, p.content_text, p.summary, p.favicon_url,
+        p.first_visit_at, p.last_visit_at, p.visit_count,
+        bm25(pages_fts) AS bm25_score,
+        snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
+      FROM pages_fts
+      JOIN pages p ON p.id = pages_fts.id
+      WHERE pages_fts MATCH ?
+      ORDER BY bm25_score
+      LIMIT ? OFFSET ?
+    `);
 
-      const results = [];
-      stmt.bind([query, limit, offset]);
-      while (stmt.step()) {
-        results.push(this.rowToObject(stmt));
-      }
-      stmt.finalize();
-
-      return results;
-    } catch (ftsError) {
-      console.warn('[DB] FTS5 bm25() not available, trying rank-based search:', ftsError?.message || ftsError);
-
-      // Try rank-based ordering as a secondary fallback
-      try {
-        const stmt2 = this.db.prepare(`
-          SELECT p.*, rank AS bm25_score,
-                 snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
-          FROM pages_fts
-          JOIN pages p ON p.id = pages_fts.id
-          WHERE pages_fts MATCH ?
-          ORDER BY rank
-          LIMIT ? OFFSET ?
-        `);
-        const results2 = [];
-        stmt2.bind([query, limit, offset]);
-        while (stmt2.step()) {
-          results2.push(this.rowToObject(stmt2));
-        }
-        stmt2.finalize();
-        return results2;
-      } catch (rankError) {
-        console.warn('[DB] FTS5 rank-based search failed, using LIKE fallback:', rankError?.message || rankError);
-      }
-
-      // Fallback to LIKE search
-      const likeQuery = `%${query.toLowerCase()}%`;
-      const stmt = this.db.prepare(`
-        SELECT *, substr(content_text, 1, 200) as snippet
-        FROM pages
-        WHERE LOWER(title) LIKE ? OR LOWER(content_text) LIKE ?
-        ORDER BY last_visit_at DESC
-        LIMIT ? OFFSET ?
-      `);
-
-      const results = [];
-      stmt.bind([likeQuery, likeQuery, limit, offset]);
-      while (stmt.step()) {
-        results.push(this.rowToObject(stmt));
-      }
-      stmt.finalize();
-
-      return results;
+    const results = [];
+    stmt.bind([query, limit, offset]);
+    while (stmt.step()) {
+      results.push(this.rowToObject(stmt, colNames));
     }
+    stmt.finalize();
+
+    return results;
   }
 
-  hasVecSupport() {
-    // Use the flag set during schema initialization
-    return this._isVecTable === true;
-  }
+  hasVecSupport() { return true; }
 
   async vectorSearch(queryEmbedding, limit, offset = 0) {
     if (!queryEmbedding) {
       throw new Error('Query embedding required for vector search');
     }
 
-    if (!this.hasVecSupport()) {
-      console.warn('[DB] sqlite-vec not available, cannot perform vector search');
-      return [];
+    const colNames = ['id','url','domain','title','content_text','summary','favicon_url','first_visit_at','last_visit_at','visit_count','distance'];
+    const stmt = this.db.prepare(`
+      SELECT id, url, domain, title, content_text, summary, favicon_url,
+             first_visit_at, last_visit_at, visit_count, distance
+      FROM pages
+      WHERE embedding MATCH ?
+      ORDER BY distance
+      LIMIT ? OFFSET ?
+    `);
+
+    const results = [];
+    stmt.bind([JSON.stringify(Array.from(queryEmbedding)), limit, offset]);
+    while (stmt.step()) {
+      results.push(this.rowToObject(stmt, colNames));
     }
-
-    try {
-      const stmt = this.db.prepare(`
-        SELECT id, url, domain, title, content_text, summary, favicon_url,
-               first_visit_at, last_visit_at, visit_count, distance
-        FROM pages
-        WHERE embedding MATCH ?
-        ORDER BY distance
-        LIMIT ? OFFSET ?
-      `);
-
-      const results = [];
-      stmt.bind([JSON.stringify(Array.from(queryEmbedding)), limit, offset]);
-
-      while (stmt.step()) {
-        results.push(this.rowToObject(stmt));
-      }
-
-      stmt.finalize();
-      return results;
-    } catch (error) {
-      console.error('[DB] Vector search failed:', error);
-      return [];
-    }
+    stmt.finalize();
+    return results;
   }
 
   async hybridSearch(query, queryEmbedding, limit, offset, mode) {
-    if (!this.hasVecSupport() || !queryEmbedding) {
-      console.warn('[DB] Vector search not available, falling back to text search');
-      return this.textSearch(query, limit, offset);
-    }
+    // Get candidates from both search methods
+    const needed = Math.min(offset + limit, 200);
+    const candidateSize = Math.min(needed * 4, 200);
+    const [textResults, vectorResults] = await Promise.all([
+      this.textSearch(query, candidateSize, 0),
+      this.vectorSearch(queryEmbedding, candidateSize, 0)
+    ]);
 
-    try {
-      // Get candidates from both search methods
-      const needed = Math.min(offset + limit, 200);
-      const candidateSize = Math.min(needed * 4, 200);
-      const [textResults, vectorResults] = await Promise.all([
-        this.textSearch(query, candidateSize, 0),
-        this.vectorSearch(queryEmbedding, candidateSize, 0)
-      ]);
-
-      if (mode === 'hybrid-rrf') {
-        // Use RRF fusion only
-        const fused = this.reciprocalRankFusion(textResults, vectorResults, needed);
-        return fused.slice(offset, offset + limit);
-      } else {
-        // hybrid-rerank: normalized weighted hybrid + boosts
-        const candidates = this.reciprocalRankFusion(textResults, vectorResults, needed * 2);
-        const reranked = this.rerankCandidates(candidates, query, textResults, vectorResults, needed);
-        return reranked.slice(offset, offset + limit);
-      }
-    } catch (error) {
-      console.error('[DB] Hybrid search failed, falling back to text search:', error);
-      return this.textSearch(query, limit, offset);
+    if (mode === 'hybrid-rrf') {
+      const fused = this.reciprocalRankFusion(textResults, vectorResults, needed);
+      return fused.slice(offset, offset + limit);
+    } else {
+      const candidates = this.reciprocalRankFusion(textResults, vectorResults, needed * 2);
+      const reranked = this.rerankCandidates(candidates, query, textResults, vectorResults, needed);
+      return reranked.slice(offset, offset + limit);
     }
   }
 
@@ -867,33 +624,20 @@ class DatabaseWrapper {
     pageCountStmt.finalize();
 
     let embeddingCount = 0;
-    if (this.hasVecSupport()) {
-      // For vec0 tables, count pages with non-null embeddings
-      try {
-        const embeddingCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM pages WHERE embedding IS NOT NULL');
-        embeddingCountStmt.step();
-        embeddingCount = embeddingCountStmt.get(0);
-        embeddingCountStmt.finalize();
-      } catch (error) {
-        console.warn('[DB] Could not get embedding count:', error);
-      }
-    } else {
-      // For fallback, count from separate embeddings table
-      try {
-        const embeddingCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM page_embeddings');
-        embeddingCountStmt.step();
-        embeddingCount = embeddingCountStmt.get(0);
-        embeddingCountStmt.finalize();
-      } catch (error) {
-        console.warn('[DB] Could not get embedding count:', error);
-      }
+    // For vec0 tables, count pages with non-null embeddings
+    try {
+      const embeddingCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM pages WHERE embedding IS NOT NULL');
+      embeddingCountStmt.step();
+      embeddingCount = embeddingCountStmt.get(0);
+      embeddingCountStmt.finalize();
+    } catch (error) {
+      console.warn('[DB] Could not get embedding count:', error);
     }
 
     return {
       pageCount,
       embeddingCount,
-      hasVecSupport: this.hasVecSupport(),
-      storageType: this.hasVecSupport() ? 'sqlite-vec' : 'blob-fallback'
+      hasVecSupport: this.hasVecSupport()
     };
   }
 
@@ -905,14 +649,6 @@ class DatabaseWrapper {
       console.warn('[DB] Could not clear FTS table:', error);
     }
 
-    if (!this.hasVecSupport()) {
-      try {
-        this.db.exec('DELETE FROM page_embeddings');
-      } catch (error) {
-        console.warn('[DB] Could not clear embeddings table:', error);
-      }
-    }
-
     this.db.exec('DELETE FROM pages');
     this.db.exec('VACUUM');
   }
@@ -920,58 +656,33 @@ class DatabaseWrapper {
 
 // Embeddings initialization
 async function initializeEmbeddings() {
-  // Initialize embedding model (Transformers.js)
+  // Initialize embedding model (Transformers.js), assume bundled local model
+  const mod = await import(chrome.runtime.getURL('lib/transformers.min.js'));
+  const env = mod.env;
+  // Configure ONNX runtime for MV3 extension constraints
+  env.backends.onnx.wasm.proxy = false;
+  env.backends.onnx.wasm.numThreads = 1;
+  env.backends.onnx.wasm.simd = false;
+  env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/');
+  if (typeof env.allowLocalModels !== 'undefined') env.allowLocalModels = true;
+  if (typeof env.allowRemoteModels !== 'undefined') env.allowRemoteModels = false;
+  if (typeof env.localModelPath !== 'undefined') env.localModelPath = chrome.runtime.getURL('lib/models/');
+  // Avoid using Cache API with chrome-extension:// URLs to prevent errors
+  if (typeof env.useBrowserCache !== 'undefined') env.useBrowserCache = false;
 
-  try {
-    const mod = await import(chrome.runtime.getURL('lib/transformers.min.js'));
-    const env = mod.env;
-    // Configure ONNX runtime for MV3 extension constraints
-    env.backends.onnx.wasm.proxy = false;
-    env.backends.onnx.wasm.numThreads = 1;
-    env.backends.onnx.wasm.simd = false;
-    env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/');
-    // Avoid probing non-existent extension-local model files to prevent DevTools 404s
-    if (typeof env.allowLocalModels !== 'undefined') {
-      env.allowLocalModels = false;
+  const { pipeline } = mod;
+  // Assumes bge-small-en-v1.5-quantized is bundled with the extension
+  embedder = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5-quantized');
+
+  embedModel = {
+    initialized: true,
+    async embed(text) {
+      const str = typeof text === 'string' ? text : String(text || '');
+      const out = await embedder(str, { pooling: 'mean', normalize: true });
+      const data = out?.data || out; // transformers.js returns tensor-like
+      return data instanceof Float32Array ? data : new Float32Array(data);
     }
-    if (typeof env.allowRemoteModels !== 'undefined') {
-      env.allowRemoteModels = !!aiPrefs.allowCloudModel;
-    }
-
-    const { pipeline } = mod;
-    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-
-    embedModel = {
-      initialized: true,
-      async embed(text) {
-        const str = typeof text === 'string' ? text : String(text || '');
-        const out = await embedder(str, { pooling: 'mean', normalize: true });
-        const data = out?.data || out; // transformers.js returns tensor-like
-        return data instanceof Float32Array ? data : new Float32Array(data);
-      }
-    };
-  } catch (e) {
-    // Expected in offline dev or when network/cache unavailable; use fallback
-    console.warn('[ML] Embedding model init failed, using fallback mock:', e?.message || e);
-    // Fallback deterministic mock so the app remains usable in dev
-    embedModel = {
-      initialized: true,
-      async embed(text) {
-        const seed = String(text || 'webpage');
-        const vec = new Float32Array(384);
-        let h = 2166136261;
-        for (let i = 0; i < seed.length; i++) {
-          h ^= seed.charCodeAt(i);
-          h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
-        }
-        for (let i = 0; i < 384; i++) {
-          h ^= (h << 13); h ^= (h >>> 17); h ^= (h << 5);
-          vec[i] = ((h >>> 0) % 1000) / 500 - 1; // [-1, 1]
-        }
-        return vec;
-      }
-    };
-  }
+  };
 }
 
 // Page ingestion
@@ -1083,8 +794,8 @@ async function trySummarizeOffscreen(text, url, title) {
       }
 
       const s = await globalThis.ai.summarizer.create({
-        type: 'key-points',
-        length: 'medium',
+        type: 'tldr',
+        length: 'long',
         format: 'plain-text',
         language: 'en',
         outputLanguage: 'en'
@@ -1119,11 +830,11 @@ async function trySummarizeOffscreen(text, url, title) {
       }
     }
 
-    // Legacy API fallback (as in prototype)
+    // TODO(ai-canary): Legacy API fallback (prototype) — revisit and remove if no longer needed
     if (globalThis?.Summarizer) {
       try {
         const summarizer = await globalThis.Summarizer.create({
-          type: 'key-points', length: 'medium', format: 'plain-text', language: 'en', outputLanguage: 'en'
+          type: 'tldr', length: 'long', format: 'plain-text', language: 'en', outputLanguage: 'en'
         });
         try {
           const MAX = 8000;
@@ -1230,23 +941,10 @@ async function ingestCapturedQueue() {
 async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
 
   try {
-    let queryEmbedding = null;
-    let effectiveMode = mode;
-
-    try {
-      queryEmbedding = await embed(query);
-    } catch (e) {
-      console.warn('[OFFSCREEN] Embedding unavailable, falling back to text-only search');
-      effectiveMode = 'text';
-    }
-
-    // If vector modes requested but we don't have embeddings, force text
-    if ((mode === 'vector' || mode === 'hybrid-rrf' || mode === 'hybrid-rerank') && !queryEmbedding) {
-      effectiveMode = 'text';
-    }
+    const queryEmbedding = await embed(query);
 
     const results = await db.search(query, {
-      mode: effectiveMode,
+      mode,
       limit,
       offset,
       queryEmbedding

@@ -37,7 +37,7 @@ const languageModel = await window.ai.languageModel.create({
 ```
 
 ### Implementation Details
-- Updated all API calls in `chrome-extension/js/chrome-ai.js`
+- Updated all API calls in `chrome-extension/bridge/ai-bridge.js`
 - Added language parameters to availability checks
 - Consistent usage across all AI API interactions
 
@@ -329,6 +329,6 @@ As of the latest implementation:
 ## Reference Implementation
 
 The complete Chrome AI integration can be found in:
-- `chrome-extension/js/chrome-ai.js` - Main API wrapper
-- `chrome-extension/js/summary-manager.js` - Summarization logic
-- `chrome-extension/js/chat-manager.js` - Chat interface integration
+- `chrome-extension/bridge/ai-bridge.js` - Main API wrapper and session management
+- `chrome-extension/content-extractor.js` - Best-effort summarization in content script
+- `chrome-extension/sidepanel/history_chat.js` - Chat interface integration

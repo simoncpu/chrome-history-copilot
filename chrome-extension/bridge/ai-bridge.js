@@ -17,30 +17,18 @@ export class AIBridge {
   async initialize() {
     if (this.isInitialized) return this.capabilities;
 
-    try {
-      // Check if Chrome AI is available
-      if (!window.ai) {
-        throw new Error('Chrome AI APIs not available');
-      }
-
-      // Get language model capabilities
-      if (window.ai.languageModel) {
-        this.capabilities = {
-          languageModel: await window.ai.languageModel.capabilities(),
-          summarizer: window.ai.summarizer ? await window.ai.summarizer.capabilities() : null
-        };
-      } else {
-        this.capabilities = { languageModel: null, summarizer: null };
-      }
-
-      this.isInitialized = true;
-      return this.capabilities;
-    } catch (error) {
-      console.warn('[AI-BRIDGE] Failed to initialize AI capabilities:', error);
-      this.capabilities = { languageModel: null, summarizer: null };
-      this.isInitialized = true;
-      return this.capabilities;
+    // Strict: require Chrome AI Language Model to be available
+    if (!window.ai || !window.ai.languageModel) {
+      throw new Error('Chrome AI languageModel not available');
     }
+
+    this.capabilities = {
+      languageModel: await window.ai.languageModel.capabilities(),
+      summarizer: window.ai.summarizer ? await window.ai.summarizer.capabilities() : null
+    };
+
+    this.isInitialized = true;
+    return this.capabilities;
   }
 
   /**
@@ -190,6 +178,8 @@ Remember: You can only reference information from the provided browsing history 
       type: options.type || 'tl;dr',
       format: options.format || 'markdown',
       length: options.length || 'short',
+      language: options.language || 'en',
+      outputLanguage: options.outputLanguage || 'en',
       ...options
     };
 
@@ -217,38 +207,6 @@ Remember: You can only reference information from the provided browsing history 
       console.error('[AI-BRIDGE] Failed to summarize text:', error);
       throw error;
     }
-  }
-
-  /**
-   * Generate fallback structured response when AI is not available
-   */
-  generateStructuredResponse(query, searchResults) {
-    if (!searchResults || searchResults.length === 0) {
-      return `I couldn't find any relevant pages in your browsing history for "${query}". Try searching with different keywords or check if you've visited pages related to this topic.`;
-    }
-
-    const results = searchResults.slice(0, 5);
-    let response = `Here's what I found in your browsing history related to "${query}":\n\n`;
-
-    results.forEach((result, index) => {
-      const title = result.title || 'Untitled';
-      const url = result.url;
-      const snippet = result.summary || result.snippet || result.content_text || '';
-      const trimmedSnippet = snippet.length > 100 ? snippet.substring(0, 100) + '...' : snippet;
-
-      response += `**${index + 1}. ${title}**\n`;
-      response += `${url}\n`;
-      if (trimmedSnippet) {
-        response += `${trimmedSnippet}\n`;
-      }
-      response += '\n';
-    });
-
-    if (searchResults.length > 5) {
-      response += `... and ${searchResults.length - 5} more results found.`;
-    }
-
-    return response;
   }
 
   /**

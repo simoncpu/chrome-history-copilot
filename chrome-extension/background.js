@@ -4,8 +4,14 @@
  */
 
 // Extension installation and startup
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   setupContextMenu();
+  // Open onboarding page to let user grant all-sites access via a user gesture
+  try {
+    await chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/history_search.html#onboarding') });
+  } catch (e) {
+    console.warn('[BG] Failed to open onboarding page:', e?.message || e);
+  }
 });
 
 // Note: do not create context menu on startup to avoid duplicate id errors
@@ -61,8 +67,9 @@ async function ensureOffscreenDocument() {
     await chrome.offscreen.createDocument({
       // Disable OPFS attempts in offscreen (main thread) to avoid benign warnings
       url: 'offscreen.html?opfs-disable',
-      reasons: ['DOM_SCRAPING', 'LOCAL_STORAGE'],
-      justification: 'SQLite database operations and ML model processing'
+      // Use supported reasons. We perform heavy script work and WASM in an offscreen DOM context.
+      reasons: ['DOM_SCRAPING', 'IFRAME_SCRIPTING'],
+      justification: 'SQLite (WASM) and ML processing in isolated offscreen context'
     });
 
     offscreenCreated = true;

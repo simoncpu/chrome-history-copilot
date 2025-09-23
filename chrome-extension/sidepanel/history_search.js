@@ -55,11 +55,60 @@ function initializeSearchPage() {
   // Set up tab navigation
   setupTabNavigation();
 
+  // Host-permissions onboarding
+  setupPermissionsOnboarding();
   
 }
 
 // Note: Site access is optional; UI initializes regardless. The debug page
 // and background fallback will request optional host permissions if needed.
+
+async function setupPermissionsOnboarding() {
+  const overlay = document.getElementById('permissionOverlay');
+  const grantAllBtn = document.getElementById('grantAllSites');
+  const openSettingsBtn = document.getElementById('openExtSettings');
+
+  if (!overlay) return;
+
+  const checkAllSitesGranted = async () => {
+    try {
+      // Treat either https or http all-sites as sufficient to hide the overlay
+      const hasHttps = await chrome.permissions.contains({ origins: ['https://*/*'] });
+      if (hasHttps) return true;
+      const hasHttp = await chrome.permissions.contains({ origins: ['http://*/*'] });
+      return !!hasHttp;
+    } catch (_) {
+      return true; // fail-closed (don’t block UI)
+    }
+  };
+
+  const maybeShowOverlay = async () => {
+    const has = await checkAllSitesGranted();
+    if (!has) overlay.classList.remove('hidden');
+    else overlay.classList.add('hidden');
+  };
+
+  if (grantAllBtn) {
+    grantAllBtn.addEventListener('click', async () => {
+      try {
+        // Request https first (most common); if declined, try http as fallback
+        let granted = await chrome.permissions.request({ origins: ['https://*/*'] });
+        if (!granted) {
+          granted = await chrome.permissions.request({ origins: ['http://*/*'] });
+        }
+        if (granted) overlay.classList.add('hidden');
+      } catch (_) {}
+    });
+  }
+
+  if (openSettingsBtn) {
+    openSettingsBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+    });
+  }
+
+  await maybeShowOverlay();
+}
 
 function setupEventListeners() {
   // Search input handlers
@@ -292,7 +341,7 @@ function createResultElement(result) {
   // Favicon
   const favicon = document.createElement('img');
   favicon.className = 'result-favicon';
-  favicon.src = result.favicon_url || `chrome://favicon/${result.url}`;
+  favicon.src = result.favicon_url || getFaviconUrl(result.url, result.domain);
   favicon.alt = '';
   favicon.onerror = () => {
     favicon.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
@@ -328,6 +377,15 @@ function createResultElement(result) {
   article.appendChild(link);
 
   return article;
+}
+
+function getFaviconUrl(url, domain) {
+  try {
+    const host = domain || new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(host)}`;
+  } catch (_) {
+    return 'https://www.google.com/s2/favicons?sz=32&domain=example.com';
+  }
 }
 
 // User preferences

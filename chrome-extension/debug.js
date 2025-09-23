@@ -4,10 +4,10 @@
 
 
 // DOM elements
-let pageCount, embeddingCount, dbSize, statusIndicator, statusText;
+let pageCount, embeddingCount, statusIndicator, statusText;
 let writeMode, sqlQuery, queryResults, resultsContent;
 let refreshStats, executeQuery, clearQuery, sampleQueries;
-let exportDb, importFile, clearModelCache, clearDatabase;
+let clearModelCache, clearDatabase;
 let operationProgress, progressFill;
 let logContainer, clearLogs, exportLogs, autoRefreshLogs;
 // Permissions elements
@@ -85,7 +85,6 @@ function initializeDOMElements() {
   // Status elements
   pageCount = document.getElementById('pageCount');
   embeddingCount = document.getElementById('embeddingCount');
-  dbSize = document.getElementById('dbSize');
   statusIndicator = document.getElementById('statusIndicator');
   statusText = document.getElementById('statusText');
 
@@ -100,8 +99,6 @@ function initializeDOMElements() {
   executeQuery = document.getElementById('executeQuery');
   clearQuery = document.getElementById('clearQuery');
   sampleQueries = document.getElementById('sampleQueries');
-  exportDb = document.getElementById('exportDb');
-  importFile = document.getElementById('importFile');
   clearModelCache = document.getElementById('clearModelCache');
   clearDatabase = document.getElementById('clearDatabase');
 
@@ -147,8 +144,6 @@ function setupEventListeners() {
   sampleQueries.addEventListener('click', showSampleQueries);
 
   // Database management
-  exportDb.addEventListener('click', handleExportDatabase);
-  importFile.addEventListener('change', handleImportDatabase);
   clearModelCache.addEventListener('click', handleClearModelCache);
   clearDatabase.addEventListener('click', handleClearDatabase);
 
@@ -317,7 +312,6 @@ async function refreshStatistics() {
     // Update statistics display
     pageCount.textContent = response.pageCount || 0;
     embeddingCount.textContent = response.embeddingCount || 0;
-    dbSize.textContent = response.dbSize || 'Unknown';
 
     log('Statistics refreshed successfully', 'info');
   } catch (error) {
@@ -523,80 +517,6 @@ function showSampleQueries() {
 }
 
 // Database management
-async function handleExportDatabase() {
-  if (!isConnected) {
-    log('Cannot export database - not connected', 'warn');
-    return;
-  }
-
-  log('Exporting database...', 'info');
-  showProgress();
-
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'export-db'
-    });
-
-    if (response.error) {
-      throw new Error(response.error);
-    }
-
-    // Create download link
-    const blob = new Blob([JSON.stringify(response, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ai-history-export-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    log('Database exported successfully', 'info');
-  } catch (error) {
-    console.error('[DEBUG] Export failed:', error);
-    log(`Export failed: ${error.message}`, 'error');
-  } finally {
-    hideProgress();
-  }
-}
-
-async function handleImportDatabase() {
-  const file = importFile.files[0];
-  if (!file) return;
-
-  if (!isConnected) {
-    log('Cannot import database - not connected', 'warn');
-    return;
-  }
-
-  log(`Importing database from ${file.name}...`, 'info');
-  showProgress();
-
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const response = await chrome.runtime.sendMessage({
-      type: 'import-db',
-      data: {
-        data: Array.from(new Uint8Array(arrayBuffer)),
-        filename: file.name
-      }
-    });
-
-    if (response.error) {
-      throw new Error(response.error);
-    }
-
-    log('Database imported successfully', 'info');
-    await refreshStatistics();
-  } catch (error) {
-    console.error('[DEBUG] Import failed:', error);
-    log(`Import failed: ${error.message}`, 'error');
-  } finally {
-    hideProgress();
-    importFile.value = '';
-  }
-}
 
 async function handleClearModelCache() {
   if (!confirm('Are you sure you want to clear the model cache? This will remove downloaded AI models and may require re-downloading.')) {

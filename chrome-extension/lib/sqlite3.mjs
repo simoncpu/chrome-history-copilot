@@ -17029,7 +17029,7 @@ globalThis.sqlite3ApiBootstrap.initializersAsync.push(async (sqlite3)=>{
       //sqlite3.config.warn("installOpfsVfs.defaultProxyUri =",installOpfsVfs.defaultProxyUri);
     }
     return installOpfsVfs().catch((e)=>{
-      sqlite3.config.warn("Ignoring inability to install OPFS sqlite3_vfs:",e.message);
+      // sqlite3.config.warn("Ignoring inability to install OPFS sqlite3_vfs:",e.message);
     });
   }catch(e){
     sqlite3.config.error("installOpfsVfs() exception:",e);

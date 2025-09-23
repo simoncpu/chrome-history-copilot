@@ -159,7 +159,7 @@ async function refreshAiPrefs() {
       };
     }
   } catch (e) {
-    console.warn('[OFFSCREEN] Failed to load aiPrefs; using defaults');
+    console.debug('[OFFSCREEN] Failed to load aiPrefs; using defaults');
   }
 }
 

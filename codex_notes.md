@@ -50,6 +50,40 @@ Assumptions Going Forward
 - sqlite-vec and FTS5 present in the bundled SQLite build.
 - On install, user grants all-sites access (requested in background). If permissions get revoked, sidepanel overlays handle re-request.
 
+- 2025-09-23 — Local Model + Cache + Permissions
+- Model layout and filenames (required for Transformers.js local load)
+  - Base directory: `chrome-extension/lib/models/Xenova/bge-small-en-v1.5-quantized/`
+    - `config.json`
+    - `tokenizer.json`
+    - `tokenizer_config.json`
+    - `special_tokens_map.json`
+    - `preprocessor_config.json`
+    - `vocab.txt` (as needed)
+    - `onnx/`
+      - `model.onnx`
+      - `model_quantized.onnx` (Transformers.js expected this exact filename; we added it alongside `model.onnx`)
+  - Exposed as web-accessible resources via `manifest.json` (`lib/models/**`).
+
+- Transformers.js runtime configuration
+  - Local-only model loading: `env.allowLocalModels = true`, `env.allowRemoteModels = false`.
+  - Explicit local model path: `env.localModelPath = chrome.runtime.getURL('lib/models/')`.
+  - Disabled browser Cache API with extension URLs: `env.useBrowserCache = false` to prevent
+    “Failed to execute 'put' on 'Cache': Request scheme 'chrome-extension' is unsupported.”
+  - Code: offscreen.js (initializeEmbeddings).
+
+- Install/onboarding permissions flow
+  - Chrome requires a user gesture for `chrome.permissions.request`. We no longer call it on install.
+  - On install, background opens the search page (`sidepanel/history_search.html#onboarding`) so the user can click the overlay button to grant all-sites access.
+  - Sidepanel overlay remains active to re-request if permissions are revoked later.
+
+- Known benign logs
+  - OPFS VFS warnings from sqlite3 about Atomics.wait are expected on main thread and are safe to ignore; IndexedDB VFS is used.
+  - `[OFFSCREEN] Failed to load aiPrefs; using defaults` appears until prefs are set in storage; harmless.
+
+- TODOs
+  - Offscreen legacy `globalThis.Summarizer` fallback marked with `TODO(ai-canary)`; consider removal if no longer needed in Canary.
+  - Replace placeholder `quantize_config.json` with upstream version if required by future tooling.
+
 Key Gaps / Missing Pieces
 - Host-permissions onboarding in side panel — DONE
   - Implemented permission check for all-sites access and overlay button wiring.

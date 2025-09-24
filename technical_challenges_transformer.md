@@ -3,6 +3,11 @@
 ## Overview
 This document details the technical challenges encountered when integrating Transformers.js into a Chrome Extension Manifest V3 environment with SQLite WASM and sqlite-vec for vector embeddings.
 
+Policy note (local‑first, optional remote):
+- The extension is local‑first. We bundle a small quantized model for embeddings and load it from `lib/models/`.
+- Optionally, when a user enables “Use larger remote model”, we perform a background warm‑up that downloads the larger model over HTTPS (Cache API), then hot‑swap the pipeline if compatible (384‑dim).
+- Browsing history and prompts are never uploaded; only static model files are fetched.
+
 ## Major Challenges Encountered
 
 ### 1. Content Security Policy (CSP) Violations
@@ -31,6 +36,16 @@ env.backends.onnx.wasm.simd = false
 
 // Use local WASM files instead of CDN
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/')
+
+// Local‑first defaults
+env.allowLocalModels = true
+env.allowRemoteModels = false
+env.useBrowserCache = false // Cache API not used for chrome-extension:// URLs
+
+// During remote warm‑up only (offscreen.js):
+//   env.allowRemoteModels = true
+//   env.allowLocalModels = false   // force HTTPS resolution for warm model
+//   env.useBrowserCache = true     // allow Cache API for HTTPS assets
 ```
 
 #### CSP Evolution and Configuration Challenges:
@@ -95,7 +110,7 @@ This covers all current infrastructure:
 - `cdn-lfs-us-1.huggingface.co` - Regional LFS CDN
 - `cas-bridge.xethub.hf.co` - Third-party CDN bridge (discovered via runtime error)
 
-#### Model Download Process:
+#### Model Download Process (when enabled):
 ```
 1. Transformers.js requests model metadata from huggingface.co
 2. Model files redirected to LFS CDN (cdn-lfs*.huggingface.co)
@@ -104,7 +119,7 @@ This covers all current infrastructure:
 ```
 
 #### Solutions:
-- **Model Caching**: Transformers.js automatic model caching to browser storage
+- **Model Caching**: Transformers.js automatic model caching to browser storage (Cache API used only for HTTPS; not for extension URLs)
 - **Dynamic CSP**: Use wildcard patterns (`*.huggingface.co`) for evolving infrastructure
 - **Specific Domain Addition**: Add newly discovered domains as they appear
 - **Local Path Configuration**: Proper URL resolution for extension context:
@@ -163,7 +178,7 @@ env.backends.onnx.wasm.proxy = false;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/');
 
 // Initialize embedding pipeline
-const embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+const embedder = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5-quantized');
 ```
 
 ### Embedding Generation:
@@ -215,7 +230,7 @@ When CSP violations occur, follow these steps:
 ## Key Lessons Learned
 
 1. **Disable Threading**: Chrome extensions require single-threaded WASM execution
-2. **Local Dependencies**: Bundle all WASM and model files locally to avoid CSP issues
+2. **Local‑First**: Bundle WASM and a small model locally to avoid CSP issues; allow optional remote warm‑up with explicit user opt‑in
 3. **Offscreen Document Pattern**: Use offscreen documents for heavy ML operations, not service workers
 4. **Proper CSP Configuration**: `'wasm-unsafe-eval'` is required for WASM compilation
 5. **Message Serialization**: Float32Array needs conversion to regular arrays for message passing

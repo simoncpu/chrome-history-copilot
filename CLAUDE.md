@@ -331,9 +331,14 @@ async function answerQuery(query) {
 
 ## Privacy and Security
 
-- All data is local. No network calls for history content or embeddings unless explicitly enabled for model downloads.
-- Never transmit browsing history. Keep CSP strict; only allow hosts required for model fetch.
+- Local‑first: No browsing history leaves the device. Optional network calls are allowed only when the user enables remote warm‑up to download static model files.
+- Never transmit browsing history or prompts. Keep CSP strict; allow only the minimal hosts needed for model fetch:
+  - huggingface.co, *.huggingface.co, hf.co, *.hf.co, cdn.jsdelivr.net
 - Provide a clear “Delete all data” button in debug that drops DB and clears model caches.
+
+### Model policy
+- Default embeddings use a bundled local model (`lib/models/...`).
+- If `aiPrefs.enableRemoteWarm` is true, offscreen may fetch the larger model over HTTPS and cache it, then hot‑swap. Extension URLs are not cached (Cache API does not support chrome‑extension://).
 
 
 ## Future Work (Non‑blocking)

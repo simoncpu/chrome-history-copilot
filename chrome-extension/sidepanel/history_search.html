@@ -39,106 +39,108 @@
 
     <!-- Search Interface -->
     <main class="main-content">
-      <!-- Search Input -->
-      <div class="search-section">
-        <div class="search-container">
-          <input
-            type="text"
-            id="searchInput"
-            class="search-input"
-            placeholder="Search your browsing history..."
-            autocomplete="off"
-          >
-          <button id="searchButton" class="search-button">
-            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <circle cx="11" cy="11" r="8"></circle>
-              <path d="m21 21-4.35-4.35"></path>
+      <div class="content-scroll-wrapper">
+        <!-- Search Input -->
+        <div class="search-section">
+          <div class="search-container">
+            <input
+              type="text"
+              id="searchInput"
+              class="search-input"
+              placeholder="Search your browsing history..."
+              autocomplete="off"
+            >
+            <button id="searchButton" class="search-button">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Advanced Options Toggle -->
+          <button id="advancedToggle" class="advanced-toggle">
+            Advanced Options
+            <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <polyline points="6,9 12,15 18,9"></polyline>
             </svg>
           </button>
+
+          <!-- Advanced Options Panel -->
+          <div id="advancedPanel" class="advanced-panel hidden">
+            <div class="mode-selector">
+              <label class="mode-label">Search Mode:</label>
+              <select id="searchMode" class="mode-select">
+                <option value="hybrid-rerank">Hybrid + Rerank (Default)</option>
+                <option value="hybrid-rrf">Hybrid (RRF)</option>
+                <option value="text">Text Only</option>
+                <option value="vector">Vector Only</option>
+              </select>
+            </div>
+            <div class="option-row" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="toggleRemoteWarm" />
+              <label for="toggleRemoteWarm">Use larger remote model (warm in background)</label>
+            </div>
+            <div id="modelStatus" class="small-muted" style="margin-top: 6px; color: #6b7280;"></div>
+          </div>
         </div>
 
-        <!-- Advanced Options Toggle -->
-        <button id="advancedToggle" class="advanced-toggle">
-          Advanced Options
-          <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <polyline points="6,9 12,15 18,9"></polyline>
-          </svg>
-        </button>
-
-        <!-- Advanced Options Panel -->
-        <div id="advancedPanel" class="advanced-panel hidden">
-          <div class="mode-selector">
-            <label class="mode-label">Search Mode:</label>
-            <select id="searchMode" class="mode-select">
-              <option value="hybrid-rerank">Hybrid + Rerank (Default)</option>
-              <option value="hybrid-rrf">Hybrid (RRF)</option>
-              <option value="text">Text Only</option>
-              <option value="vector">Vector Only</option>
-            </select>
-          </div>
-          <div class="option-row" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="toggleRemoteWarm" />
-            <label for="toggleRemoteWarm">Use larger remote model (warm in background)</label>
-          </div>
-          <div id="modelStatus" class="small-muted" style="margin-top: 6px; color: #6b7280;"></div>
-        </div>
-      </div>
-
-      <!-- Results Section -->
-      <div class="results-section">
-        <!-- Loading State -->
-        <div id="loadingState" class="loading-state hidden">
-          <div class="skeleton-loader">
-            <div class="skeleton-item">
-              <div class="skeleton-favicon"></div>
-              <div class="skeleton-content">
-                <div class="skeleton-title"></div>
-                <div class="skeleton-url"></div>
-                <div class="skeleton-snippet"></div>
+        <!-- Results Section -->
+        <div class="results-section">
+          <!-- Loading State -->
+          <div id="loadingState" class="loading-state hidden">
+            <div class="skeleton-loader">
+              <div class="skeleton-item">
+                <div class="skeleton-favicon"></div>
+                <div class="skeleton-content">
+                  <div class="skeleton-title"></div>
+                  <div class="skeleton-url"></div>
+                  <div class="skeleton-snippet"></div>
+                </div>
               </div>
-            </div>
-            <div class="skeleton-item">
-              <div class="skeleton-favicon"></div>
-              <div class="skeleton-content">
-                <div class="skeleton-title"></div>
-                <div class="skeleton-url"></div>
-                <div class="skeleton-snippet"></div>
+              <div class="skeleton-item">
+                <div class="skeleton-favicon"></div>
+                <div class="skeleton-content">
+                  <div class="skeleton-title"></div>
+                  <div class="skeleton-url"></div>
+                  <div class="skeleton-snippet"></div>
+                </div>
               </div>
-            </div>
-            <div class="skeleton-item">
-              <div class="skeleton-favicon"></div>
-              <div class="skeleton-content">
-                <div class="skeleton-title"></div>
-                <div class="skeleton-url"></div>
-                <div class="skeleton-snippet"></div>
+              <div class="skeleton-item">
+                <div class="skeleton-favicon"></div>
+                <div class="skeleton-content">
+                  <div class="skeleton-title"></div>
+                  <div class="skeleton-url"></div>
+                  <div class="skeleton-snippet"></div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Empty State -->
-        <div id="emptyState" class="empty-state">
-          <div class="empty-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <circle cx="11" cy="11" r="8"></circle>
-              <path d="m21 21-4.35-4.35"></path>
-            </svg>
+          <!-- Empty State -->
+          <div id="emptyState" class="empty-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+              </svg>
+            </div>
+            <h3>Search Your History</h3>
+            <p>Enter a query above to search through your browsing history using AI-powered semantic search.</p>
           </div>
-          <h3>Search Your History</h3>
-          <p>Enter a query above to search through your browsing history using AI-powered semantic search.</p>
-        </div>
 
-        <!-- Results List -->
-        <div id="resultsList" class="results-list hidden"></div>
+          <!-- Results List -->
+          <div id="resultsList" class="results-list hidden"></div>
 
-        <!-- Load More Button -->
-        <button id="loadMoreButton" class="load-more-button hidden">Load More Results</button>
+          <!-- Load More Button -->
+          <button id="loadMoreButton" class="load-more-button hidden">Load More Results</button>
 
-        <!-- Error State -->
-        <div id="errorState" class="error-state hidden">
-          <div class="error-icon">⚠️</div>
-          <h3>Search Error</h3>
-          <p id="errorMessage">Something went wrong. Please try again.</p>
+          <!-- Error State -->
+          <div id="errorState" class="error-state hidden">
+            <div class="error-icon">⚠️</div>
+            <h3>Search Error</h3>
+            <p id="errorMessage">Something went wrong. Please try again.</p>
+          </div>
         </div>
       </div>
     </main>

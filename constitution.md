@@ -11,8 +11,8 @@ Request only the permissions needed for the core feature. Use specific `host_per
 ### III. MV3-First
 Target Manifest V3. Use a background Service Worker where needed. Prefer declarative APIs. Avoid persistent pages or unnecessary long-running scripts.
 
-### IV. Privacy By Default
-No data leaves the device by default. If network access is essential, document endpoints and purpose in `README`.
+### IV. Privacy By Default (Local‑First)
+No data leaves the device by default. The project is local‑first. Optional network fetches are allowed only when explicitly enabled by the user and only for static artifacts (e.g., model files). Never transmit browsing history or user prompts. Document any endpoints and purpose in the `README`.
 
 ### V. Simple Build & Release
 No build step by default. Keep a flat, small codebase. Load unpacked during development. Zip the folder for release and bump `manifest.json` version.

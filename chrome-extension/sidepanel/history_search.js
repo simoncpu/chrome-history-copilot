@@ -25,6 +25,7 @@ let currentOffset = 0;
 let isLoading = false;
 let hasMoreResults = false;
 let lastBatch = [];
+let isAutoLoading = false;
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeSearchPage);
@@ -53,8 +54,8 @@ function initializeSearchPage() {
   // Set up event listeners
   setupEventListeners();
 
-  // Load saved preferences
-  loadUserPreferences();
+  // Load saved preferences and auto-execute last search
+  loadAndExecuteLastSearch();
 
   // Query model status on load
   updateModelStatus();
@@ -66,6 +67,23 @@ function initializeSearchPage() {
   // Host-permissions onboarding
   setupPermissionsOnboarding();
   
+}
+
+// Load preferences and execute last search if available
+async function loadAndExecuteLastSearch() {
+  try {
+    const lastQuery = await loadUserPreferences();
+
+    if (lastQuery && lastQuery.trim().length >= 2) {
+      // Set the search input to the saved query
+      searchInput.value = lastQuery;
+
+      // Auto-execute the search
+      performSearch(lastQuery, 0, true);
+    }
+  } catch (error) {
+    console.error('[SEARCH] Failed to load and execute last search:', error);
+  }
 }
 
 // Note: Site access is optional; UI initializes regardless. The debug page
@@ -156,6 +174,25 @@ function setupEventListeners() {
 
   // Load more button
   loadMoreButton.addEventListener('click', handleLoadMore);
+
+  // Scroll position saving (debounced)
+  const scrollWrapper = document.querySelector('.content-scroll-wrapper');
+  let scrollTimeout;
+  if (scrollWrapper) {
+    scrollWrapper.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(async () => {
+        // Only save if there are search results displayed
+        if (currentResults.length > 0) {
+          try {
+            await chrome.storage.local.set({ lastScrollPosition: scrollWrapper.scrollTop });
+          } catch (error) {
+            console.error('[SEARCH] Failed to save scroll position:', error);
+          }
+        }
+      }, 500); // Debounce delay
+    });
+  }
 }
 
 function setupTabNavigation() {
@@ -233,15 +270,33 @@ function handleLoadMore() {
 }
 
 // Search execution
-async function performSearch(query, offset = 0) {
+async function performSearch(query, offset = 0, isAutoLoad = false) {
 
   if (isLoading) return;
 
+  // Clear scroll position if this is a new search query (but not on auto-load)
+  if (offset === 0 && query !== currentQuery && currentQuery !== '') {
+    try {
+      await chrome.storage.local.set({ lastScrollPosition: 0 });
+    } catch (error) {
+      console.error('[SEARCH] Failed to clear scroll position:', error);
+    }
+  }
+
   currentQuery = query;
   isLoading = true;
+  isAutoLoading = isAutoLoad;
 
   // Show loading state
   if (offset === 0) {
+
+    // Save the search query for next session
+    try {
+      await chrome.storage.local.set({ lastSearchQuery: query });
+    } catch (error) {
+      console.error('[SEARCH] Failed to save last search query:', error);
+    }
+
     showLoadingState();
     currentResults = [];
     currentOffset = 0;
@@ -344,8 +399,17 @@ function displayResults() {
 
   // Add new results
   const newResults = lastBatch && lastBatch.length ? lastBatch : currentResults;
-  newResults.forEach(result => {
+  newResults.forEach((result, index) => {
     const resultElement = createResultElement(result);
+
+    if (!isAutoLoading) {
+      // Add staggered animation delay for new searches
+      resultElement.style.animationDelay = `${index * 100}ms`;
+    } else {
+      // Skip animation for auto-load to enable instant scroll
+      resultElement.style.animation = 'none';
+    }
+
     resultsList.appendChild(resultElement);
   });
 
@@ -354,6 +418,31 @@ function displayResults() {
     loadMoreButton.classList.remove('hidden');
   } else {
     loadMoreButton.classList.add('hidden');
+  }
+
+  // Restore scroll position after animations complete (only on initial load, not pagination)
+  if (currentOffset === (lastBatch?.length || 0)) {
+    // Use different timing based on whether this is auto-load or new search
+    const scrollDelay = isAutoLoading ? 50 : 1200; // Instant vs animated
+
+    setTimeout(async () => {
+      try {
+        const stored = await chrome.storage.local.get(['lastScrollPosition']);
+
+        if (stored.lastScrollPosition && stored.lastScrollPosition > 0) {
+          const scrollWrapper = document.querySelector('.content-scroll-wrapper');
+
+          if (scrollWrapper) {
+            scrollWrapper.scrollTop = stored.lastScrollPosition;
+          }
+        }
+      } catch (error) {
+        console.error('[SEARCH] Failed to restore scroll position:', error);
+      }
+
+      // Reset auto-loading flag after scroll restoration is complete
+      isAutoLoading = false;
+    }, scrollDelay);
   }
 }
 
@@ -364,7 +453,7 @@ function createResultElement(result) {
   // Create clickable link
   const link = document.createElement('a');
   link.href = result.url;
-  link.className = 'result-item';
+  link.className = 'result-link';
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
 
@@ -374,17 +463,33 @@ function createResultElement(result) {
   favicon.src = result.favicon_url || getFaviconUrl(result.url, result.domain);
   favicon.alt = '';
   favicon.onerror = () => {
-    favicon.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
+    favicon.style.background = 'linear-gradient(135deg, #7dd3fc, #a78bfa)';
+    favicon.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
   };
 
   // Content container
   const content = document.createElement('div');
   content.className = 'result-content';
 
+  // Header with title and badges
+  const header = document.createElement('div');
+  header.className = 'result-header';
+
   // Title
   const title = document.createElement('h3');
   title.className = 'result-title';
   title.textContent = result.title || 'Untitled';
+
+  // Badges container
+  const badges = document.createElement('div');
+  badges.className = 'result-badges';
+
+  // Search mode badge
+  const modeBadge = createSearchModeBadge(searchMode?.value || 'hybrid-rerank');
+  badges.appendChild(modeBadge);
+
+  header.appendChild(title);
+  header.appendChild(badges);
 
   // URL
   const url = document.createElement('div');
@@ -396,10 +501,56 @@ function createResultElement(result) {
   snippet.className = 'result-snippet';
   snippet.textContent = result.summary || result.snippet || 'No description available';
 
+  // Metadata container
+  const metadata = document.createElement('div');
+  metadata.className = 'result-metadata';
+
+  // Visit count pill (if available)
+  if (result.visit_count && result.visit_count > 1) {
+    const visitPill = document.createElement('span');
+    visitPill.className = 'visit-count-pill';
+    visitPill.innerHTML = `👁️ ${result.visit_count} visits`;
+    metadata.appendChild(visitPill);
+  }
+
+  // Last visit time (if available)
+  if (result.last_visit_at) {
+    const lastVisit = document.createElement('span');
+    lastVisit.className = 'last-visit';
+    lastVisit.innerHTML = `🕒 ${formatLastVisit(result.last_visit_at)}`;
+    metadata.appendChild(lastVisit);
+  }
+
+  // Relevance indicator (if score available)
+  if (result.score !== undefined) {
+    const relevanceIndicator = document.createElement('div');
+    relevanceIndicator.className = 'relevance-indicator';
+
+    const relevanceLabel = document.createElement('span');
+    relevanceLabel.textContent = 'Relevance:';
+
+    const relevanceBar = document.createElement('div');
+    relevanceBar.className = 'relevance-bar';
+
+    const relevanceFill = document.createElement('div');
+    relevanceFill.className = 'relevance-fill';
+    // Normalize score to 0-100% (assuming score is 0-1)
+    const scorePercent = Math.max(0, Math.min(100, (result.score || 0) * 100));
+    relevanceFill.style.width = `${scorePercent}%`;
+
+    relevanceBar.appendChild(relevanceFill);
+    relevanceIndicator.appendChild(relevanceLabel);
+    relevanceIndicator.appendChild(relevanceBar);
+    metadata.appendChild(relevanceIndicator);
+  }
+
   // Assemble elements
-  content.appendChild(title);
+  content.appendChild(header);
   content.appendChild(url);
   content.appendChild(snippet);
+  if (metadata.children.length > 0) {
+    content.appendChild(metadata);
+  }
 
   link.appendChild(favicon);
   link.appendChild(content);
@@ -407,6 +558,64 @@ function createResultElement(result) {
   article.appendChild(link);
 
   return article;
+}
+
+function createSearchModeBadge(mode) {
+  const badge = document.createElement('span');
+  badge.className = 'search-mode-badge';
+
+  let badgeText = '';
+  let badgeClass = '';
+
+  switch (mode) {
+    case 'hybrid-rerank':
+      badgeText = '🚀 Hybrid+';
+      badgeClass = 'search-mode-rerank';
+      break;
+    case 'hybrid-rrf':
+      badgeText = '⚡ Hybrid';
+      badgeClass = 'search-mode-hybrid';
+      break;
+    case 'text':
+      badgeText = '📝 Text';
+      badgeClass = 'search-mode-text';
+      break;
+    case 'vector':
+      badgeText = '🧠 Vector';
+      badgeClass = 'search-mode-vector';
+      break;
+    default:
+      badgeText = '🔍 Search';
+      badgeClass = 'search-mode-hybrid';
+  }
+
+  badge.textContent = badgeText;
+  badge.classList.add(badgeClass);
+
+  return badge;
+}
+
+function formatLastVisit(timestamp) {
+  try {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 60) {
+      return `${diffMinutes}m ago`;
+    } else if (diffHours < 24) {
+      return `${diffHours}h ago`;
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else {
+      return date.toLocaleDateString();
+    }
+  } catch (e) {
+    return 'recently';
+  }
 }
 
 function getFaviconUrl(url, domain) {
@@ -421,7 +630,7 @@ function getFaviconUrl(url, domain) {
 // User preferences
 async function loadUserPreferences() {
   try {
-    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs']);
+    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs', 'lastSearchQuery']);
 
     if (result.searchMode) {
       searchMode.value = result.searchMode;
@@ -432,8 +641,12 @@ async function loadUserPreferences() {
       toggleRemoteWarm.checked = pref;
     }
 
+    // Return the last search query for auto-execution
+    return result.lastSearchQuery || null;
+
   } catch (error) {
     console.error('[SEARCH] Failed to load preferences:', error);
+    return null;
   }
 }
 

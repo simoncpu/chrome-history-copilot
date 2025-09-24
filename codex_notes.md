@@ -1,102 +1,39 @@
-AI History Extension — Codebase Review Notes
+AI History Extension — Notes (Clean)
 
-Scope: chrome-extension/* and root docs. Focus on MV3 extension structure, Chrome AI APIs usage, embeddings/SQLite pipeline, and UX.
+Current State
+- Architecture: MV3 extension with background service worker, offscreen document for DB/ML, sidepanel UIs (Search, Chat), Debug page, and a content script for capture.
+- Chrome AI: Chat uses Chrome’s Language Model only (no structured fallback). `AIBridge.initialize()` is strict and throws if unavailable.
+- Embeddings: Local-first using bundled `Xenova/bge-small-en-v1.5-quantized`. Optional remote warm-up can hot-swap to `Xenova/bge-small-en-v1.5` when enabled.
+- Database: Requires sqlite-vec (vec0, 384-dim) and FTS5. No LIKE/regular-table fallbacks.
+- Permissions: On install, opens Search page to prompt user to grant all-sites. Sidepanel overlays can re-request if revoked.
 
-Summary
-- Solid MV3 scaffolding: background SW + offscreen doc for heavy work, side panel UIs, debug page, content script capture.
-- Hybrid search is thoughtfully implemented with FTS5 + sqlite-vec (with fallback when vec0 isn’t available).
-- Chrome AI APIs are integrated (Summarizer + Language Model) with graceful fallbacks; Transformers.js embedding pipeline configured for MV3 constraints.
-- A few missing features and rough edges remain around permissions UX, CSP, import/export, reranker, and minor API details.
+Remote Warm-Up (Optional)
+- Preference: `aiPrefs.enableRemoteWarm` (boolean, saved in `chrome.storage.local`).
+- Behavior: Offscreen loads local model immediately; if enabled, it warms the remote model (HTTPS + Cache API) and hot-swaps when ready.
+- Status API: `get-model-status` → `{ using: 'local'|'remote', warming: boolean, lastError: string|null }`.
+- UI:
+  - Search/Chat Advanced Options: toggle + status line with spinner during warm-up.
+  - Debug Preferences: toggle + “Refresh” model status.
 
-Status Updates (Applied)
-- Fixed offscreen reasons: replaced unsupported `LOCAL_STORAGE` with `IFRAME_SCRIPTING` in `chrome-extension/background.js`.
-- Side panel permissions onboarding: implemented overlay logic and buttons in `chrome-extension/sidepanel/history_search.js` and `chrome-extension/sidepanel/history_chat.js` to request all-sites host access and open extension settings.
-- Summarizer options consistency: added `{ language: 'en', outputLanguage: 'en' }` defaults in `chrome-extension/bridge/ai-bridge.js` summarizer session creation.
-- Row mapping robustness: changed SELECTs to explicit column lists and passed column names to `rowToObject` in `chrome-extension/offscreen.js` for text, rank-fallback, LIKE, and vector searches.
-- Debug UI cleanup: removed Database Size stat and Export/Import controls from `chrome-extension/debug.html` and corresponding logic from `chrome-extension/debug.js`.
-- Removed unused client: deleted `chrome-extension/bridge/db-bridge.js`.
-- Docs drift corrected: updated references in `technical_challenges_chrome_api.md` to current files (`bridge/ai-bridge.js`, `content-extractor.js`, `sidepanel/history_chat.js`).
+Transformers.js Configuration
+- Local model path: `env.localModelPath = chrome.runtime.getURL('lib/models/')`.
+- Default: `env.allowLocalModels = true`, `env.allowRemoteModels = false`, `env.useBrowserCache = false`.
+- During warm-up only: temporarily set `allowRemoteModels = true`, `allowLocalModels = false`, `useBrowserCache = true` to fetch and cache HTTPS assets.
 
-2025-09-23 — Chrome AI + Fallback Cleanup
-- Phase 1 (AI-only):
-  - Made `AIBridge.initialize()` strict: throws if `window.ai.languageModel` is unavailable (chrome-extension/bridge/ai-bridge.js:17–43).
-  - Removed chat structured-response fallback and always use Chrome AI for chat:
-    - Deleted `generateStructuredResponse(...)` and fallback call path (chrome-extension/sidepanel/history_chat.js).
-    - Removed unused `generateStructuredResponse(...)` in bridge (chrome-extension/bridge/ai-bridge.js).
-  - Updated chat status messages to no longer mention “using fallback” (AI must be available).
+Model Packaging (Local)
+- Place under: `chrome-extension/lib/models/Xenova/bge-small-en-v1.5-quantized/`
+  - Files: `config.json`, `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`, `preprocessor_config.json`, `vocab.txt` (if used)
+  - ONNX: `onnx/model.onnx` and `onnx/model_quantized.onnx`
+- Expose via `manifest.json` web_accessible_resources: `lib/models/**`.
 
-- Phase 2 (assumptions and simplifications):
-- Transformers.js model: assume a bundled local model `Xenova/bge-small-en-v1.5-quantized`.
-  - Configure Transformers env to allow local, disallow remote; initialize pipeline with that model.
-  - Removed deterministic mock embedding fallback (chrome-extension/offscreen.js:initializeEmbeddings).
-  - Set `env.localModelPath = chrome.runtime.getURL('lib/models/')` and exposed `lib/models/**` via web_accessible_resources.
-  - SQLite features: assume sqlite-vec and FTS5 are always available.
-    - Always create `pages` as `vec0` virtual table and `pages_fts` as FTS5; removed regular-table/LIKE fallbacks.
-    - Simplified search paths: no FTS/LIKE fallback; no vec-unavailable branches.
-    - Cleaned stats/clear paths accordingly (chrome-extension/offscreen.js).
-- Host permissions: assume all-sites granted on install; if revoked later, side panel onboards again.
-    - NOTE: Chrome requires a user gesture for `chrome.permissions.request`. Instead of requesting on install, we now open the search page to prompt the user to grant access via the overlay button (chrome-extension/background.js).
-    - Sidepanel onboarding overlays remain to re-request if permissions are revoked.
-  - Offscreen summarization legacy API:
-    - Kept the `globalThis.Summarizer` fallback but marked with `TODO(ai-canary)` to revisit/removal (chrome-extension/offscreen.js).
+Known Benign Logs
+- sqlite3 OPFS warning about Atomics.wait: harmless (IndexedDB VFS is used).
+- aiPrefs load debug on first run: harmless (defaults applied).
 
-Notes on Bundling the Embedding Model
-- The code assumes `Xenova/bge-small-en-v1.5-quantized` is packaged with the extension and accessible to Transformers.js as a local model.
-- env.allowLocalModels=true and env.allowRemoteModels=false are set. Ensure model files are placed where Transformers.js can resolve them from extension URLs (e.g., under `lib/models/...`) and that `web_accessible_resources` includes the paths if needed.
+Open TODOs
+- Review and remove legacy `globalThis.Summarizer` code path if not needed in Canary.
+- Replace placeholder `quantize_config.json` with the upstream version if a tool depends on it.
 
-Assumptions Going Forward
-- Chrome Canary with Chrome AI APIs enabled (window.ai.languageModel and summarizer available=readily in extension pages).
-- Local embedding model is present and loadable; no remote fetch.
-- sqlite-vec and FTS5 present in the bundled SQLite build.
-- On install, user grants all-sites access (requested in background). If permissions get revoked, sidepanel overlays handle re-request.
-
-- 2025-09-23 — Local Model + Cache + Permissions
-- Model layout and filenames (required for Transformers.js local load)
-  - Base directory: `chrome-extension/lib/models/Xenova/bge-small-en-v1.5-quantized/`
-    - `config.json`
-    - `tokenizer.json`
-    - `tokenizer_config.json`
-    - `special_tokens_map.json`
-    - `preprocessor_config.json`
-    - `vocab.txt` (as needed)
-    - `onnx/`
-      - `model.onnx`
-      - `model_quantized.onnx` (Transformers.js expected this exact filename; we added it alongside `model.onnx`)
-  - Exposed as web-accessible resources via `manifest.json` (`lib/models/**`).
-
-- Transformers.js runtime configuration
-  - Local-only model loading: `env.allowLocalModels = true`, `env.allowRemoteModels = false`.
-  - Explicit local model path: `env.localModelPath = chrome.runtime.getURL('lib/models/')`.
-  - Disabled browser Cache API with extension URLs: `env.useBrowserCache = false` to prevent
-    “Failed to execute 'put' on 'Cache': Request scheme 'chrome-extension' is unsupported.”
-  - Code: offscreen.js (initializeEmbeddings).
-
-- Install/onboarding permissions flow
-  - Chrome requires a user gesture for `chrome.permissions.request`. We no longer call it on install.
-  - On install, background opens the search page (`sidepanel/history_search.html#onboarding`) so the user can click the overlay button to grant all-sites access.
-  - Sidepanel overlay remains active to re-request if permissions are revoked later.
-
-- Known benign logs
-  - OPFS VFS warnings from sqlite3 about Atomics.wait are expected on main thread and are safe to ignore; IndexedDB VFS is used.
-  - `[OFFSCREEN] Failed to load aiPrefs; using defaults` appears until prefs are set in storage; harmless.
-
-- TODOs
-  - Offscreen legacy `globalThis.Summarizer` fallback marked with `TODO(ai-canary)`; consider removal if no longer needed in Canary.
-  - Replace placeholder `quantize_config.json` with upstream version if required by future tooling.
-
-- 2025-09-23 — Remote Warm (optional)
-  - Added user toggle in Search → Advanced Options: "Use larger remote model (warm in background)" (`history_search.html/js`).
-  - Pref key: `aiPrefs.enableRemoteWarm` (boolean). Saved to `chrome.storage.local`.
-  - Offscreen:
-    - Local-first load of `Xenova/bge-small-en-v1.5-quantized`.
-    - If enabled, background warm-up of `Xenova/bge-small-en-v1.5` using Cache API and then hot-swap embedder.
-    - Status exposed via `chrome.runtime.sendMessage({ type: 'get-model-status' })` with fields: `{ using: 'local'|'remote', warming: boolean, lastError }`.
-    - Remote warm only for https (Cache API) and preserves no-cache behavior for chrome-extension URLs.
-  - UI shows model status under Advanced Options.
-
-- 2025-09-23 — Preference cleanup
-  - Removed redundant `allowCloudModel` flag from prefs and UI. Remote warm-up is controlled solely by `aiPrefs.enableRemoteWarm`.
-  - Offscreen enables remote downloads only during warm-up when that flag is on; otherwise model loading is strictly local.
 
 Key Gaps / Missing Pieces
 - Host-permissions onboarding in side panel — DONE

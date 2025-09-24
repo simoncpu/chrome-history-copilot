@@ -87,7 +87,7 @@ Phase 6.1 — Debug Page (DB Explorer)
 - [x] Build `debug.html`/`.js` for query runner (read-only default, guarded write toggle)
 - [x] Buttons: Clear DB, Clear Model Cache, Export DB, Import DB
   - [ ] Optional: Expose DB size in `get-stats` for display
-  - [x] Preferences toggles: `allowCloudModel`, `enableReranker`; reload embeddings
+  - [x] Preferences toggles: `enableRemoteWarm`, `enableReranker`; reload embeddings
 
 Phase 6.2 — Background Context Menu
 - [x] Ensure "AI History: Debug" opens `debug.html` in new tab
@@ -122,5 +122,5 @@ Phase 8.3 — Code Cleanup & Optimization
 
 Phase 8.4 — Packaging & Docs
 - [ ] Update `manifest.json: version`; zip `chrome-extension/` for release
-- [ ] Update README/notes (local docs); ensure no external references
-- [ ] Final privacy pass: no telemetry; explicit local-first behavior
+  - [ ] Update README/notes (local docs); document optional remote endpoints (local‑first policy)
+  - [ ] Final privacy pass: no telemetry; explicit local‑first behavior with optional remote warm‑up

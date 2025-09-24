@@ -2,7 +2,7 @@
  * AI History Search - Search Page Controller
  */
 
- 
+
 
 // DOM elements
 let searchInput;
@@ -66,7 +66,7 @@ function initializeSearchPage() {
 
   // Host-permissions onboarding
   setupPermissionsOnboarding();
-  
+
 }
 
 // Load preferences and execute last search if available
@@ -123,7 +123,7 @@ async function setupPermissionsOnboarding() {
           granted = await chrome.permissions.request({ origins: ['http://*/*'] });
         }
         if (granted) overlay.classList.add('hidden');
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
@@ -457,6 +457,10 @@ function createResultElement(result) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
 
+  // Header row container (favicon + header as siblings)
+  const headerRow = document.createElement('div');
+  headerRow.className = 'result-header-row';
+
   // Favicon
   const favicon = document.createElement('img');
   favicon.className = 'result-favicon';
@@ -466,10 +470,6 @@ function createResultElement(result) {
     favicon.style.background = 'linear-gradient(135deg, #7dd3fc, #a78bfa)';
     favicon.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
   };
-
-  // Content container
-  const content = document.createElement('div');
-  content.className = 'result-content';
 
   // Header with title and badges
   const header = document.createElement('div');
@@ -490,6 +490,14 @@ function createResultElement(result) {
 
   header.appendChild(title);
   header.appendChild(badges);
+
+  // Add favicon and header to header row
+  headerRow.appendChild(favicon);
+  headerRow.appendChild(header);
+
+  // Details container (url, snippet, metadata without left margin)
+  const details = document.createElement('div');
+  details.className = 'result-details';
 
   // URL
   const url = document.createElement('div');
@@ -544,16 +552,16 @@ function createResultElement(result) {
     metadata.appendChild(relevanceIndicator);
   }
 
-  // Assemble elements
-  content.appendChild(header);
-  content.appendChild(url);
-  content.appendChild(snippet);
+  // Assemble details elements
+  details.appendChild(url);
+  details.appendChild(snippet);
   if (metadata.children.length > 0) {
-    content.appendChild(metadata);
+    details.appendChild(metadata);
   }
 
-  link.appendChild(favicon);
-  link.appendChild(content);
+  // Assemble the link
+  link.appendChild(headerRow);
+  link.appendChild(details);
 
   article.appendChild(link);
 
@@ -569,23 +577,23 @@ function createSearchModeBadge(mode) {
 
   switch (mode) {
     case 'hybrid-rerank':
-      badgeText = '🚀 Hybrid+';
+      badgeText = '🚀';
       badgeClass = 'search-mode-rerank';
       break;
     case 'hybrid-rrf':
-      badgeText = '⚡ Hybrid';
+      badgeText = '⚡';
       badgeClass = 'search-mode-hybrid';
       break;
     case 'text':
-      badgeText = '📝 Text';
+      badgeText = '📝';
       badgeClass = 'search-mode-text';
       break;
     case 'vector':
-      badgeText = '🧠 Vector';
+      badgeText = '🧠';
       badgeClass = 'search-mode-vector';
       break;
     default:
-      badgeText = '🔍 Search';
+      badgeText = '🔍';
       badgeClass = 'search-mode-hybrid';
   }
 

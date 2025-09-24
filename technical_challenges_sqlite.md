@@ -4,6 +4,28 @@ This document provides an in-depth technical analysis of the storage mechanisms,
 
 ## SQLite Database Storage in IndexedDB
 
+### Current Status: IndexedDB VFS Not Available
+
+**Issue Identified (2025-01-28)**: The current sqlite-vec WASM build does not include IndexedDB VFS support.
+
+**Evidence**:
+- `sqlite3.capi.sqlite3_js_vfs_list()` returns only: `["unix-none", "memfs", "kvvfs", "opfs", "default"]`
+- IndexedDB VFS is missing from available options
+- Database falls back to `unix-none` VFS which provides no persistence
+
+**Current Workaround**: Using default VFS temporarily while maintaining `/idb-ai-history.db` path for future compatibility.
+
+**Solution Required**: Manual compilation of sqlite-vec WASM with IndexedDB VFS enabled.
+
+**Compilation Notes for Future Reference**:
+- SQLite WASM build needs IndexedDB VFS module included
+- IndexedDB VFS provides the `/idb-` path prefix functionality
+- Once compiled, existing code will automatically detect and use IndexedDB VFS
+
+---
+
+## SQLite Database Storage in IndexedDB (Future Implementation)
+
 ### The Virtual File System (VFS) Abstraction
 
 SQLite WASM provides a clever abstraction layer that allows SQLite to store databases in browser storage APIs while maintaining its file-based interface.

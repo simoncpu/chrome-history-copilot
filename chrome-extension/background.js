@@ -4,13 +4,18 @@
  */
 
 // Extension installation and startup
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   setupContextMenu();
-  // Open onboarding page to let user grant all-sites access via a user gesture
-  try {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/history_search.html#onboarding') });
-  } catch (e) {
-    console.warn('[BG] Failed to open onboarding page:', e?.message || e);
+
+  // Open welcome page for new installations and major updates
+  if (details.reason === 'install' ||
+      (details.reason === 'update' && details.previousVersion !== chrome.runtime.getManifest().version)) {
+    try {
+      await chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+      console.log('[BG] Welcome page opened for onboarding');
+    } catch (e) {
+      console.warn('[BG] Failed to open welcome page:', e?.message || e);
+    }
   }
 });
 
@@ -48,22 +53,61 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 // Offscreen document management
 let offscreenCreated = false;
+let offscreenCreationPromise = null;
 
 async function ensureOffscreenDocument() {
-  if (offscreenCreated) {
-    return;
+  // If we're already in the process of creating an offscreen document, wait for it
+  if (offscreenCreationPromise) {
+    return offscreenCreationPromise;
   }
 
+  // If already created and verified, return immediately
+  if (offscreenCreated) {
+    try {
+      // Verify it still exists by checking contexts
+      const existingContexts = await chrome.runtime.getContexts({
+        contextTypes: ['OFFSCREEN_DOCUMENT']
+      });
+
+      if (existingContexts.length > 0) {
+        return;
+      } else {
+        // Mark as not created if context is gone
+        offscreenCreated = false;
+      }
+    } catch (error) {
+      console.warn('[BG] Failed to check offscreen contexts:', error);
+      offscreenCreated = false;
+    }
+  }
+
+  // Create the offscreen document
+  offscreenCreationPromise = createOffscreenDocument();
+
   try {
+    await offscreenCreationPromise;
+    offscreenCreated = true;
+  } catch (error) {
+    console.error('[BG] Failed to create offscreen document:', error);
+    offscreenCreated = false;
+  } finally {
+    offscreenCreationPromise = null;
+  }
+}
+
+async function createOffscreenDocument() {
+  try {
+    // Double-check for existing contexts before creating
     const existingContexts = await chrome.runtime.getContexts({
       contextTypes: ['OFFSCREEN_DOCUMENT']
     });
 
     if (existingContexts.length > 0) {
-      offscreenCreated = true;
+      console.log('[BG] Offscreen document already exists, skipping creation');
       return;
     }
 
+    console.log('[BG] Creating new offscreen document');
     await chrome.offscreen.createDocument({
       // Disable OPFS attempts in offscreen (main thread) to avoid benign warnings
       url: 'offscreen.html?opfs-disable',
@@ -72,9 +116,86 @@ async function ensureOffscreenDocument() {
       justification: 'SQLite (WASM) and ML processing in isolated offscreen context'
     });
 
-    offscreenCreated = true;
+    console.log('[BG] Offscreen document created successfully');
   } catch (error) {
-    console.error('[BG] Failed to create offscreen document:', error);
+    if (error.message.includes('Only a single offscreen document may be created')) {
+      console.log('[BG] Offscreen document already exists (caught creation error)');
+      // This is expected if another process created it first
+      return;
+    }
+    throw error;
+  }
+}
+
+// Robust message forwarding to offscreen document
+async function forwardToOffscreen(message, sendResponse, retryCount = 0) {
+  const maxRetries = 2;
+
+  try {
+    // Ensure offscreen document exists
+    await ensureOffscreenDocument();
+
+    // Small delay to ensure document is fully ready
+    if (retryCount === 0) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // Forward the message
+    const response = await chrome.runtime.sendMessage(message);
+    sendResponse(response);
+
+  } catch (error) {
+    const isConnectionError = error.message.includes('Could not establish connection') ||
+                              error.message.includes('Receiving end does not exist');
+
+    if (isConnectionError && retryCount < maxRetries) {
+      console.warn(`[BG] Connection error (attempt ${retryCount + 1}), retrying in 500ms:`, error.message);
+
+      // Reset offscreen state and retry
+      offscreenCreated = false;
+      offscreenCreationPromise = null;
+
+      setTimeout(() => {
+        forwardToOffscreen(message, sendResponse, retryCount + 1);
+      }, 500 * (retryCount + 1)); // Exponential backoff
+
+    } else {
+      console.error('[BG] Failed to forward message to offscreen after retries:', error);
+      sendResponse({ error: `Offscreen communication failed: ${error.message}` });
+    }
+  }
+}
+
+// Helper function for direct message sending with retries (for background processes)
+async function sendToOffscreenWithRetry(message, retryCount = 0) {
+  const maxRetries = 2;
+
+  try {
+    await ensureOffscreenDocument();
+
+    if (retryCount === 0) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    return await chrome.runtime.sendMessage(message);
+
+  } catch (error) {
+    const isConnectionError = error.message.includes('Could not establish connection') ||
+                              error.message.includes('Receiving end does not exist');
+
+    if (isConnectionError && retryCount < maxRetries) {
+      console.warn(`[BG] Background message retry (attempt ${retryCount + 1}):`, error.message);
+
+      // Reset offscreen state and retry
+      offscreenCreated = false;
+      offscreenCreationPromise = null;
+
+      await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
+      return sendToOffscreenWithRetry(message, retryCount + 1);
+
+    } else {
+      throw new Error(`Offscreen communication failed after ${maxRetries} retries: ${error.message}`);
+    }
   }
 }
 
@@ -103,8 +224,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'capturedSummary') {
     (async () => {
       try {
-        await ensureOffscreenDocument();
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await sendToOffscreenWithRetry({
           type: 'update-summary',
           data: message.payload
         });
@@ -119,9 +239,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Route messages to offscreen document
   if (message.target === 'offscreen') {
-    ensureOffscreenDocument().then(() => {
-      chrome.runtime.sendMessage(message).then(sendResponse);
-    });
+    forwardToOffscreen(message, sendResponse);
     return true; // Keep message channel open for async response
   }
 
@@ -134,16 +252,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   ];
 
   if (offscreenMessages.includes(message.type)) {
-    // Forward to offscreen document
-    ensureOffscreenDocument().then(async () => {
-      try {
-        const response = await chrome.runtime.sendMessage(message);
-        sendResponse(response);
-      } catch (error) {
-        console.error('[BG] Failed to forward message to offscreen:', error);
-        sendResponse({ error: error.message });
-      }
-    });
+    // Forward to offscreen document with robust error handling
+    forwardToOffscreen(message, sendResponse);
     return true; // Keep message channel open for async response
   }
 
@@ -167,46 +277,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       extractPageContent(message.url, sendResponse);
       return true; // Async response
 
+    case 'onboarding-complete':
+      console.log('[BG] Onboarding completed, permissions should be granted');
+      sendResponse({ status: 'ok' });
+      break;
+
     default:
       console.warn('[BG] Unknown message type:', message.type);
       sendResponse({ error: 'Unknown message type' });
   }
 });
 
-// History ingestion triggers
+// History ingestion triggers - optimized with duplicate prevention
 chrome.history.onVisited.addListener((historyItem) => {
-  // Skip internal URLs
-  if (!isInternalUrl(historyItem.url)) {
-    // Queue for ingestion
-    queuePageForIngestion(historyItem);
+  try {
+    // Skip internal URLs and recently processed URLs
+    if (isInternalUrl(historyItem.url)) {
+      return;
+    }
+
+    // Additional filtering to prevent spam from rapid navigation
+    if (recentlyProcessed.has(historyItem.url)) {
+      console.log(`[BG] Skipping recently processed history item: ${historyItem.url}`);
+      return;
+    }
+
+    console.log(`[BG] History item queued: ${historyItem.url}`);
+    queuePageForIngestion({
+      url: historyItem.url,
+      title: historyItem.title,
+      visitTime: Math.floor(historyItem.lastVisitTime || Date.now())
+    });
+  } catch (error) {
+    console.error('[BG] Error in history listener:', error);
   }
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && !isInternalUrl(tab.url)) {
-    // Trigger content extraction and ingestion
-    queuePageForIngestion({
+    // Debounce tab updates to prevent rapid-fire processing
+    debounceTabUpdate(tabId, {
       url: tab.url,
       title: tab.title,
-      visitTime: Date.now(),
+      visitTime: Math.floor(Date.now()),
       tabId
     });
   }
 });
 
-// Auto-capture on navigation completion
+// Auto-capture on navigation completion - optimized to avoid duplicate processing
 chrome.webNavigation.onCompleted.addListener(({ tabId, url, frameId }) => {
   try {
     if (frameId !== 0) return; // only top-level frames
     if (!/^https?:\/\//.test(url)) return; // only http/https
+    if (isInternalUrl(url)) return; // skip internal URLs
 
-    // Navigation completed: trigger auto-capture message to content script
+    // Only send auto-capture if we haven't already processed this URL recently
+    if (recentlyProcessed.has(url)) {
+      console.log(`[BG] Skipping auto-capture for recently processed URL: ${url}`);
+      return;
+    }
 
-    // Send auto-capture message to content script
+    // Send auto-capture message to content script (non-blocking)
     chrome.tabs.sendMessage(tabId, { type: 'autoCapture' }, () => {
       // Ignore errors when content script isn't present or page is restricted
       void chrome.runtime.lastError;
     });
+
+    console.log(`[BG] Auto-capture triggered for: ${url}`);
   } catch (e) {
     // Ignore errors in navigation handler
   }
@@ -301,23 +439,27 @@ async function handleCapturedContent(payload, sendResponse) {
       await ensureOffscreenDocument();
 
       // Send payload directly for immediate ingestion
-      chrome.runtime.sendMessage({
+      sendToOffscreenWithRetry({
         type: 'ingest-captured-payload',
         data: payload
       }).then((resp) => {
         if (resp?.error) {
           console.warn('[BG] Offscreen direct ingest error:', resp.error);
         }
-      }).catch(() => void chrome.runtime.lastError);
+      }).catch((error) => {
+        console.warn('[BG] Failed to send captured payload:', error.message);
+      });
 
       // Also send generic ingest signal for any queued items
-      chrome.runtime.sendMessage({
+      sendToOffscreenWithRetry({
         type: 'ingest-captured-queue'
       }).then((resp) => {
         if (resp?.error) {
           console.warn('[BG] Offscreen queue ingest error:', resp.error);
         }
-      }).catch(() => void chrome.runtime.lastError);
+      }).catch((error) => {
+        console.warn('[BG] Failed to send queue ingest signal:', error.message);
+      });
 
     } catch (e) {
       console.warn('[BG] Offscreen ingestion not available:', e);
@@ -366,10 +508,14 @@ async function deleteCapturedEntries(urls, sendResponse) {
   }
 }
 
-// Page ingestion queue (legacy support)
+// Page ingestion queue with throttling
 const ingestionQueue = [];
 let isProcessingQueue = false;
 const recentlyProcessed = new Set(); // Track recently processed URLs
+const pendingTabUpdates = new Map(); // Debounce tab updates
+const DEBOUNCE_DELAY = 1000; // 1 second debounce
+const PROCESSING_DELAY = 2000; // 2 seconds between processing items
+const DUPLICATE_WINDOW = 30000; // 30 seconds duplicate prevention
 
 function isInternalUrl(url) {
   // Skip internal Chrome/Edge pages and extension pages
@@ -380,26 +526,78 @@ function isInternalUrl(url) {
          url.startsWith('file://');
 }
 
+function debounceTabUpdate(tabId, pageInfo) {
+  // Clear any existing timeout for this tab
+  if (pendingTabUpdates.has(tabId)) {
+    clearTimeout(pendingTabUpdates.get(tabId).timeoutId);
+  }
+
+  // Set up new debounced update
+  const timeoutId = setTimeout(() => {
+    pendingTabUpdates.delete(tabId);
+    queuePageForIngestion(pageInfo);
+  }, DEBOUNCE_DELAY);
+
+  pendingTabUpdates.set(tabId, {
+    timeoutId,
+    pageInfo,
+    timestamp: Date.now()
+  });
+
+  console.log(`[BG] Debounced tab update for: ${pageInfo.url} (tab ${tabId})`);
+}
+
 async function queuePageForIngestion(pageInfo) {
-  // Skip internal URLs that we can't extract content from
-  if (isInternalUrl(pageInfo.url)) {
-    return;
-  }
+  try {
+    // Skip internal URLs that we can't extract content from
+    if (isInternalUrl(pageInfo.url)) {
+      return;
+    }
 
-  // Skip if we've recently processed this URL (dedupe within 30 seconds)
-  const urlKey = pageInfo.url;
-  if (recentlyProcessed.has(urlKey)) {
-    return;
-  }
+    // Enhanced duplicate prevention
+    const urlKey = pageInfo.url;
+    if (recentlyProcessed.has(urlKey)) {
+      console.log(`[BG] Skipping recently processed URL: ${pageInfo.url}`);
+      return;
+    }
 
-  // Mark as recently processed
-  recentlyProcessed.add(urlKey);
-  setTimeout(() => recentlyProcessed.delete(urlKey), 30000); // Clean up after 30s
+    // Check if page already exists in database to avoid unnecessary processing
+    try {
+      const response = await sendToOffscreenWithRetry({
+        type: 'page-exists',
+        data: { url: pageInfo.url }
+      });
+      if (response.exists) {
+        console.log(`[BG] Skipping already indexed URL: ${pageInfo.url}`);
+        // Still mark as recently processed to avoid repeated checks
+        recentlyProcessed.add(urlKey);
+        setTimeout(() => recentlyProcessed.delete(urlKey), DUPLICATE_WINDOW);
+        return;
+      }
+    } catch (error) {
+      console.warn(`[BG] Failed to check if page exists, proceeding with ingestion:`, error);
+    }
 
-  ingestionQueue.push(pageInfo);
+    // Mark as recently processed with automatic cleanup
+    recentlyProcessed.add(urlKey);
+    setTimeout(() => recentlyProcessed.delete(urlKey), DUPLICATE_WINDOW);
 
-  if (!isProcessingQueue) {
-    processIngestionQueue();
+    const queueItem = {
+      ...pageInfo,
+      queuedAt: Date.now(),
+      attempts: 0,
+      maxAttempts: 2
+    };
+
+    ingestionQueue.push(queueItem);
+    console.log(`[BG] Queued page for ingestion: ${pageInfo.url} (queue size: ${ingestionQueue.length})`);
+
+    // Start processing queue if not already running
+    if (!isProcessingQueue) {
+      processIngestionQueue();
+    }
+  } catch (error) {
+    console.error(`[BG] Failed to queue page for ingestion:`, error);
   }
 }
 
@@ -409,51 +607,50 @@ async function processIngestionQueue() {
   }
 
   isProcessingQueue = true;
+  const startTime = Date.now();
+
+  console.log(`[BG] Starting queue processing with ${ingestionQueue.length} items`);
 
   try {
     await ensureOffscreenDocument();
+
     while (ingestionQueue.length > 0) {
       const pageInfo = ingestionQueue.shift();
+      const itemStartTime = Date.now();
+
+      console.log(`[BG] Processing item: ${pageInfo.url} (${ingestionQueue.length} remaining)`);
 
       try {
-        // Try to extract real content if possible
+        // Extract content with timeout protection
         const tabs = await chrome.tabs.query({ url: pageInfo.url });
         let extractedContent = null;
-        // Check host permission for this origin to clarify why extraction may fail
-        try {
-          const origin = new URL(pageInfo.url).origin + '/*';
-          const hasPerm = await chrome.permissions.contains({ origins: [origin] });
-          if (!hasPerm) {
-            console.warn('[BG] No host permission for origin; content script and scripting extraction may be blocked unless user grants access.');
-          }
-        } catch (permErr) {
-          console.warn('[BG] Host permission check failed:', permErr?.message || permErr);
-        }
+
         if (tabs.length > 0) {
           try {
-            extractedContent = await sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });
+            // Add timeout to content extraction
+            const extractionPromise = sendMessageWithRetry(tabs[0].id, { type: 'getPageContent' });
+            extractedContent = await Promise.race([
+              extractionPromise,
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 5000))
+            ]);
           } catch (e) {
-            console.warn('[BG] Failed to extract via content script, trying scripting for:', pageInfo.url, e.message);
-            // Option C: request optional host permission for this origin when needed for scripting fallback
+            console.warn(`[BG] Content script extraction failed for ${pageInfo.url}:`, e.message);
+
+            // Fallback to scripting with timeout
             try {
-              const origin = new URL(pageInfo.url).origin + '/*';
-              const hasPerm = await chrome.permissions.contains({ origins: [origin] });
-              if (!hasPerm) {
-                const granted = await chrome.permissions.request({ origins: [origin] });
-              }
-            } catch (reqErr) {
-              console.warn('[BG] Optional host permission request failed:', reqErr?.message || reqErr);
-            }
-            try {
-              extractedContent = await extractViaScripting(tabs[0]);
+              const scriptingPromise = extractViaScripting(tabs[0]);
+              extractedContent = await Promise.race([
+                scriptingPromise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Scripting timeout')), 5000))
+              ]);
             } catch (e2) {
-              console.warn('[BG] Fallback scripting extraction failed:', e2.message);
+              console.warn(`[BG] Scripting extraction failed for ${pageInfo.url}:`, e2.message);
             }
           }
         }
 
-        // Send to offscreen for processing
-        const response = await chrome.runtime.sendMessage({
+        // Send to offscreen for processing with retry logic
+        const response = await sendToOffscreenWithRetry({
           target: 'offscreen',
           type: 'ingest-page',
           data: {
@@ -461,15 +658,38 @@ async function processIngestionQueue() {
             extractedContent
           }
         });
+
         if (response?.error) {
-          console.error('[BG] Ingestion failed:', response.error);
+          console.error(`[BG] Ingestion failed for ${pageInfo.url}:`, response.error);
+
+          // Retry logic for failed items
+          pageInfo.attempts = (pageInfo.attempts || 0) + 1;
+          if (pageInfo.attempts < pageInfo.maxAttempts) {
+            console.log(`[BG] Retrying ${pageInfo.url} (attempt ${pageInfo.attempts + 1}/${pageInfo.maxAttempts})`);
+            ingestionQueue.push(pageInfo); // Add back to end of queue
+          }
+        } else {
+          const processingTime = Date.now() - itemStartTime;
+          console.log(`[BG] Successfully processed ${pageInfo.url} in ${processingTime}ms`);
+          updatePerformanceMetrics(processingTime, true);
         }
+
       } catch (error) {
-        console.error('[BG] Failed to process page:', pageInfo.url, error);
+        console.error(`[BG] Failed to process page ${pageInfo.url}:`, error);
+        updatePerformanceMetrics(0, false);
+      }
+
+      // Yield control back to the main thread to prevent UI blocking
+      if (ingestionQueue.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, PROCESSING_DELAY));
       }
     }
+  } catch (error) {
+    console.error('[BG] Queue processing error:', error);
   } finally {
     isProcessingQueue = false;
+    const totalTime = Date.now() - startTime;
+    console.log(`[BG] Queue processing completed in ${totalTime}ms`);
   }
 }
 
@@ -495,3 +715,85 @@ async function extractViaScripting(tab) {
   });
   return result;
 }
+
+// Performance monitoring and cleanup
+let performanceMetrics = {
+  processedPages: 0,
+  failedPages: 0,
+  totalProcessingTime: 0,
+  averageProcessingTime: 0,
+  queueHighWaterMark: 0,
+  lastReset: Date.now()
+};
+
+function updatePerformanceMetrics(processingTime, success = true) {
+  if (success) {
+    performanceMetrics.processedPages++;
+    performanceMetrics.totalProcessingTime += processingTime;
+    performanceMetrics.averageProcessingTime =
+      performanceMetrics.totalProcessingTime / performanceMetrics.processedPages;
+  } else {
+    performanceMetrics.failedPages++;
+  }
+
+  // Track queue size
+  if (ingestionQueue.length > performanceMetrics.queueHighWaterMark) {
+    performanceMetrics.queueHighWaterMark = ingestionQueue.length;
+  }
+
+  // Log performance stats every 10 processed pages
+  if ((performanceMetrics.processedPages + performanceMetrics.failedPages) % 10 === 0) {
+    console.log('[BG] Performance metrics:', {
+      processed: performanceMetrics.processedPages,
+      failed: performanceMetrics.failedPages,
+      avgTime: `${performanceMetrics.averageProcessingTime.toFixed(0)}ms`,
+      queuePeak: performanceMetrics.queueHighWaterMark,
+      currentQueue: ingestionQueue.length
+    });
+  }
+}
+
+// Periodic cleanup of stale data
+setInterval(() => {
+  try {
+    // Clean up stale debounced updates (older than 5 minutes)
+    const staleTime = Date.now() - 300000;
+    const staleTabIds = [];
+
+    for (const [tabId, data] of pendingTabUpdates.entries()) {
+      if (data.timestamp < staleTime) {
+        clearTimeout(data.timeoutId);
+        staleTabIds.push(tabId);
+      }
+    }
+
+    staleTabIds.forEach(tabId => pendingTabUpdates.delete(tabId));
+
+    if (staleTabIds.length > 0) {
+      console.log(`[BG] Cleaned up ${staleTabIds.length} stale pending tab updates`);
+    }
+
+    // Reset performance metrics hourly
+    if (Date.now() - performanceMetrics.lastReset > 3600000) {
+      console.log('[BG] Hourly performance summary:', performanceMetrics);
+      performanceMetrics = {
+        processedPages: 0,
+        failedPages: 0,
+        totalProcessingTime: 0,
+        averageProcessingTime: 0,
+        queueHighWaterMark: Math.max(0, ingestionQueue.length),
+        lastReset: Date.now()
+      };
+    }
+  } catch (error) {
+    console.error('[BG] Cleanup error:', error);
+  }
+}, 60000); // Run every minute
+
+// Export performance metrics for debugging
+globalThis.getBackgroundMetrics = () => ({
+  ...performanceMetrics,
+  currentQueue: ingestionQueue.length,
+  pendingUpdates: pendingTabUpdates.size,
+  recentlyProcessed: recentlyProcessed.size
+});

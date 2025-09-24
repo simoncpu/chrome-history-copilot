@@ -1125,6 +1125,71 @@ Monitor Chrome flags that might affect SQLite WASM:
 - `#enable-webassembly-baseline`
 - `#enable-webassembly-lazy-compilation`
 
+## Chrome History API Data Type Issues
+
+### INTEGER Column Type Enforcement
+
+Chrome's History API can return floating-point timestamp values, but SQLite INTEGER columns require integer values. This causes the error:
+
+```
+SQLITE_ERROR: sqlite3 result code 1: Expected integer for INTEGER metadata column first_visit_at, received FLOAT
+```
+
+**Solution**: Always use `Math.floor()` when inserting timestamp values from Chrome APIs:
+
+```javascript
+// ❌ WRONG: Chrome API may return FLOAT
+visitTime: historyItem.lastVisitTime || Date.now()
+
+// ✅ CORRECT: Ensure INTEGER value
+visitTime: Math.floor(historyItem.lastVisitTime || Date.now())
+```
+
+**Applied Fixes**:
+- `background.js`: Lines 309, 322 - Queue ingestion with Math.floor()
+- `offscreen.js`: Lines 790-791, 836-837 - Database insertions with Math.floor()
+- `content-extractor.js`: Line 106 - Content payload with Math.floor()
+
+**Root Cause**: Chrome's `historyItem.lastVisitTime` property returns milliseconds since epoch, but sometimes as a floating-point number instead of an integer. SQLite's INTEGER type strictly enforces integer values, causing insertion failures.
+
+## Duplicate Processing Prevention
+
+### UI Shows "Processing..." for Already-Indexed Pages
+
+**Problem**: When visiting a website that has already been indexed, the UI incorrectly shows "Processing pages..." status even though the page already exists in the database with a summary.
+
+**Root Cause**: The ingestion queue only checked for recent duplicates (30-second window) but didn't verify if a page already existed in the database, causing unnecessary processing UI to appear.
+
+**Solution**: Added database existence check before queueing pages for ingestion:
+
+```javascript
+// Check if page already exists in database to avoid unnecessary processing
+try {
+  const response = await sendToOffscreenWithRetry({
+    type: 'page-exists',
+    data: { url: pageInfo.url }
+  });
+  if (response.exists) {
+    console.log(`[BG] Skipping already indexed URL: ${pageInfo.url}`);
+    return; // Don't queue for processing
+  }
+} catch (error) {
+  console.warn(`[BG] Failed to check if page exists, proceeding with ingestion:`, error);
+}
+```
+
+**Implementation Details**:
+- Added `pageExists(url)` method to `DatabaseManager` class in `offscreen.js`
+- Added `page-exists` message handler in offscreen document
+- Modified `queuePageForIngestion()` in `background.js` to check database before queueing
+- Graceful fallback: if database check fails, proceed with ingestion anyway
+
+**Benefits**:
+- Eliminates false "processing..." status for already-indexed pages
+- Reduces unnecessary database operations and UI updates
+- Maintains user experience consistency
+- Preserves existing duplicate prevention for rapid navigation
+
 ## Extension-Specific Error Patterns
 
 ### Common Error Scenarios

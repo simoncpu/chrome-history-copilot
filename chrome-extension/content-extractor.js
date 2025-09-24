@@ -103,7 +103,7 @@
           title: document.title || '',
           text: extractVisibleText(),
           domain: location.hostname,
-          timestamp: Date.now()
+          timestamp: Math.floor(Date.now())
         };
         sendResponse(payload);
       } catch (e) {
@@ -137,7 +137,7 @@
             summaryType: summary ? 'tldr' : null,
             aiModel: summary ? 'chrome-ai-summarizer' : null,
             generatedAt: new Date().toISOString(),
-            timestamp: Date.now()
+            timestamp: Math.floor(Date.now())
           };
 
           // Send captured content to background for storage

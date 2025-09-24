@@ -82,6 +82,11 @@ async function handleMessage(message, sendResponse) {
         sendResponse(stats);
         break;
 
+      case 'page-exists':
+        const exists = db.pageExists(message.data.url);
+        sendResponse({ exists });
+        break;
+
       case 'execute-sql':
         const sqlResult = await executeSQL(message.data);
         sendResponse(sqlResult);
@@ -294,6 +299,18 @@ class DatabaseWrapper {
     upd.step();
     upd.finalize();
     return { success: true, updated: 1, id };
+  }
+
+  pageExists(url) {
+    if (!url) return false;
+    const sel = this.db.prepare('SELECT id FROM pages WHERE url = ? LIMIT 1');
+    sel.bind([url]);
+    let exists = false;
+    if (sel.step()) {
+      exists = true;
+    }
+    sel.finalize();
+    return exists;
   }
 
   async initializeSchema() {
@@ -787,8 +804,8 @@ async function ingestPage(pageInfo) {
       content_text: content.text,
       summary: summary,
       domain: new URL(pageInfo.url).hostname,
-      first_visit_at: pageInfo.visitTime || Date.now(),
-      last_visit_at: pageInfo.visitTime || Date.now(),
+      first_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
+      last_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       visit_count: 1,
       embedding: embedding
     });
@@ -833,8 +850,8 @@ async function ingestCapturedContent(capturedData) {
       content_text: capturedData.text,
       summary: summary,
       domain: capturedData.domain,
-      first_visit_at: capturedData.timestamp || Date.now(),
-      last_visit_at: capturedData.timestamp || Date.now(),
+      first_visit_at: Math.floor(capturedData.timestamp || Date.now()),
+      last_visit_at: Math.floor(capturedData.timestamp || Date.now()),
       visit_count: 1,
       embedding: embedding
     });

@@ -344,6 +344,23 @@ async function performSearch(query, offset = 0, isAutoLoad = false) {
   }
 
   try {
+    // Check if system is still initializing
+    let pingResponse;
+    try {
+      pingResponse = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'ping'
+      });
+    } catch (pingError) {
+      console.warn('[SEARCH] Ping failed, proceeding with search:', pingError);
+    }
+
+    // If system is initializing, the loading state (shimmer) will continue
+    // until the search completes or fails
+    if (pingResponse && pingResponse.initializing) {
+      console.log('[SEARCH] System still initializing, search will wait...');
+    }
+
     // Send search request to offscreen document
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',

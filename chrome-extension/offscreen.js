@@ -15,6 +15,8 @@ let modelStatus = {
   lastError: null
 };
 let isInitialized = false;
+let isInitializing = false;
+let initializationPromise = null;
 let aiPrefs = { enableReranker: false, enableRemoteWarm: false };
 
 // Summarization queue state
@@ -38,7 +40,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleMessage(message, sendResponse) {
   try {
     if (!isInitialized && message.type !== 'init') {
-      await initialize();
+      // If initialization is in progress, wait for it to complete
+      if (isInitializing && initializationPromise) {
+        await initializationPromise;
+      } else {
+        await initialize();
+      }
     }
 
     switch (message.type) {
@@ -122,7 +129,11 @@ async function handleMessage(message, sendResponse) {
         break;
 
       case 'ping':
-        sendResponse({ status: 'ok', initialized: isInitialized });
+        sendResponse({
+          status: 'ok',
+          initialized: isInitialized,
+          initializing: isInitializing
+        });
         break;
 
       case 'refresh-ai-prefs':
@@ -191,8 +202,27 @@ async function handleMessage(message, sendResponse) {
 async function initialize() {
   if (isInitialized) return;
 
+  // If already initializing, return the existing promise
+  if (isInitializing && initializationPromise) {
+    return initializationPromise;
+  }
+
+  isInitializing = true;
+  initializationPromise = performInitialization();
+
   try {
-    // Initialize SQLite database
+    await initializationPromise;
+  } finally {
+    isInitializing = false;
+    initializationPromise = null;
+  }
+}
+
+async function performInitialization() {
+  try {
+    console.log('[OFFSCREEN] Starting initialization...');
+
+    // Initialize PGlite database
     await initializeDatabase();
 
     // Load AI preferences from storage
@@ -205,8 +235,10 @@ async function initialize() {
     }
 
     isInitialized = true;
+    console.log('[OFFSCREEN] Initialization completed successfully');
   } catch (error) {
     console.error('[OFFSCREEN] Initialization failed:', error);
+    isInitialized = false;
     throw error;
   }
 }
@@ -605,7 +637,7 @@ class DatabaseWrapper {
     };
 
     const vecN = mkNorm(vecVals, true);
-    const bmN = mkNorm(bmVals, true);
+    const bmN = mkNorm(bmVals, false);
 
     candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
     const maxVisits = Math.max(1, ...visitVals);
@@ -1200,15 +1232,16 @@ function getSummaryQueueStats() {
     isProcessing: isProcessingSummaries
   };
 
-  console.log(`[SUMMARIZATION] Queue Stats:`, stats);
-  if (summarizationQueue.length > 0) {
-    console.log(`[SUMMARIZATION] Queued items:`, summarizationQueue.map(item => ({
-      url: item.url,
-      title: item.data.title,
-      domain: item.data.domain,
-      attempts: item.attempts
-    })));
-  }
+  // Commented out to reduce log noise - only uncomment for debugging
+  // console.log(`[SUMMARIZATION] Queue Stats:`, stats);
+  // if (summarizationQueue.length > 0) {
+  //   console.log(`[SUMMARIZATION] Queued items:`, summarizationQueue.map(item => ({
+  //     url: item.url,
+  //     title: item.data.title,
+  //     domain: item.data.domain,
+  //     attempts: item.attempts
+  //   })));
+  // }
 
   return stats;
 }

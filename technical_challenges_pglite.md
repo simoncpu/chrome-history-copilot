@@ -736,6 +736,60 @@ const testQuery = await db.query('SELECT 1 as test');
 console.assert(testQuery.rows[0].test === 1, 'Database connectivity failed');
 ```
 
+### PGlite Initialization Race Conditions
+
+**Issue**: `Cannot read properties of undefined (reading 'mode')` during IndexedDB initialization
+
+**Cause**: Chrome extensions can receive search requests before PGlite has finished initializing its IndexedDB storage, causing race conditions during database startup.
+
+**Root Cause**: PGlite's IndexedDB initialization is asynchronous and can take several seconds. If the UI sends search requests immediately after extension startup, they may arrive before the database is ready.
+
+**Solution**: Implement proper initialization state management:
+
+```javascript
+// Track initialization state
+let isInitialized = false;
+let isInitializing = false;
+let initializationPromise = null;
+
+async function initialize() {
+  if (isInitialized) return;
+
+  // If already initializing, return the existing promise
+  if (isInitializing && initializationPromise) {
+    return initializationPromise;
+  }
+
+  isInitializing = true;
+  initializationPromise = performInitialization();
+
+  try {
+    await initializationPromise;
+  } finally {
+    isInitializing = false;
+    initializationPromise = null;
+  }
+}
+
+async function handleMessage(message, sendResponse) {
+  try {
+    if (!isInitialized && message.type !== 'init') {
+      // If initialization is in progress, wait for it to complete
+      if (isInitializing && initializationPromise) {
+        await initializationPromise;
+      } else {
+        await initialize();
+      }
+    }
+    // Handle message...
+  } catch (error) {
+    sendResponse({ error: error.message });
+  }
+}
+```
+
+**UI Integration**: The search UI shows loading shimmer during initialization and automatically waits for database readiness.
+
 ### Extension Reload Requirements
 
 If you encounter "Unknown message type" errors, reload the extension at `chrome://extensions/` to refresh the offscreen document and its dependencies.

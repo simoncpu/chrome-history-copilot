@@ -129,7 +129,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const offscreenMessages = [
     'ingest-page', 'search', 'embed', 'clear-db', 'get-stats',
     'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary',
-    'refresh-ai-prefs', 'reload-embeddings', 'get-model-status', 'start-remote-warm'
+    'refresh-ai-prefs', 'reload-embeddings', 'get-model-status', 'start-remote-warm',
+    'get-summary-queue-stats', 'process-summary-queue', 'clear-summary-queue'
   ];
 
   if (offscreenMessages.includes(message.type)) {

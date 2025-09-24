@@ -357,6 +357,43 @@
       </div>
     </div>
 
+    <!-- Summarization Queue Section -->
+    <div class="section">
+      <h2 class="section-title">AI Summarization Queue</h2>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="queueLength">-</div>
+          <div class="stat-label">Queued</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="queueCompleted">-</div>
+          <div class="stat-label">Completed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="queueFailed">-</div>
+          <div class="stat-label">Failed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">
+            <span class="status-indicator" id="queueStatusIndicator"></span>
+            <span id="queueStatusText">-</span>
+          </div>
+          <div class="stat-label">Queue Status</div>
+        </div>
+      </div>
+
+      <div id="currentlyProcessing" style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin: 16px 0; display: none;">
+        <div style="font-weight: 600; margin-bottom: 8px;">Currently Processing:</div>
+        <div id="processingDetails" style="font-size: 13px; color: #64748b;"></div>
+      </div>
+
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="refreshQueueStats" class="button button-primary">🔄 Refresh Stats</button>
+        <button id="processQueue" class="button button-secondary">▶️ Process Queue</button>
+        <button id="clearQueue" class="button button-danger">🗑️ Clear Queue</button>
+      </div>
+    </div>
+
     <!-- Preferences -->
     <div class="section">
       <h2 class="section-title">Preferences</h2>

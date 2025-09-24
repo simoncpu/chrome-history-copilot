@@ -12,6 +12,10 @@ let operationProgress, progressFill;
 let logContainer, clearLogs, exportLogs, autoRefreshLogs;
 // Permissions elements
 let grantAllSitesAccessBtn, grantCurrentSiteAccessBtn, checkCurrentSiteAccessBtn, openExtensionSettingsBtn;
+// Queue elements
+let queueLength, queueCompleted, queueFailed, queueStatusIndicator, queueStatusText;
+let currentlyProcessing, processingDetails;
+let refreshQueueStats, processQueue, clearQueue;
 
 // Content analysis elements
 let analyzeRecentPages, showContentStats, testSearchModes;
@@ -132,6 +136,18 @@ function initializeDOMElements() {
   grantCurrentSiteAccessBtn = document.getElementById('grantCurrentSiteAccess');
   checkCurrentSiteAccessBtn = document.getElementById('checkCurrentSiteAccess');
   openExtensionSettingsBtn = document.getElementById('openExtensionSettings');
+
+  // Queue elements
+  queueLength = document.getElementById('queueLength');
+  queueCompleted = document.getElementById('queueCompleted');
+  queueFailed = document.getElementById('queueFailed');
+  queueStatusIndicator = document.getElementById('queueStatusIndicator');
+  queueStatusText = document.getElementById('queueStatusText');
+  currentlyProcessing = document.getElementById('currentlyProcessing');
+  processingDetails = document.getElementById('processingDetails');
+  refreshQueueStats = document.getElementById('refreshQueueStats');
+  processQueue = document.getElementById('processQueue');
+  clearQueue = document.getElementById('clearQueue');
 }
 
 function setupEventListeners() {
@@ -169,6 +185,11 @@ function setupEventListeners() {
   if (grantCurrentSiteAccessBtn) grantCurrentSiteAccessBtn.addEventListener('click', handleGrantCurrentSiteAccess);
   if (checkCurrentSiteAccessBtn) checkCurrentSiteAccessBtn.addEventListener('click', handleCheckCurrentSiteAccess);
   if (openExtensionSettingsBtn) openExtensionSettingsBtn.addEventListener('click', handleOpenExtensionSettings);
+
+  // Queue management
+  if (refreshQueueStats) refreshQueueStats.addEventListener('click', handleRefreshQueueStats);
+  if (processQueue) processQueue.addEventListener('click', handleProcessQueue);
+  if (clearQueue) clearQueue.addEventListener('click', handleClearQueue);
 
   // Keyboard shortcuts
   sqlQuery.addEventListener('keydown', (e) => {
@@ -321,6 +342,9 @@ async function refreshStatistics() {
     embeddingCount.textContent = response.embeddingCount || 0;
 
     log('Statistics refreshed successfully', 'info');
+
+    // Also refresh queue stats
+    await handleRefreshQueueStats();
   } catch (error) {
     console.error('[DEBUG] Failed to refresh statistics:', error);
     log(`Failed to refresh statistics: ${error.message}`, 'error');
@@ -857,11 +881,167 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function formatQueryResults(response) {
+  if (!response.results || response.results.length === 0) {
+    return '<p style="color: #64748b; text-align: center;">No results returned.</p>';
+  }
+
+  const headers = Object.keys(response.results[0]);
+  let html = '<table class="results-table"><thead><tr>';
+
+  headers.forEach(header => {
+    html += `<th>${escapeHtml(header)}</th>`;
+  });
+
+  html += '</tr></thead><tbody>';
+
+  response.results.forEach(row => {
+    html += '<tr>';
+    headers.forEach(header => {
+      const value = row[header];
+      if (value === null) {
+        html += '<td style="color: #94a3b8; font-style: italic;">NULL</td>';
+      } else if (typeof value === 'string' && value.length > 50) {
+        html += `<td title="${escapeHtml(value)}">${escapeHtml(value.substring(0, 50))}...</td>`;
+      } else {
+        html += `<td>${escapeHtml(String(value))}</td>`;
+      }
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  html += `<p style="margin-top: 12px; color: #64748b; font-size: 13px;">${response.results.length} rows returned</p>`;
+
+  return html;
+}
+
+// Queue management functions
+async function handleRefreshQueueStats() {
+  if (!isConnected) {
+    log('Cannot refresh queue stats - not connected', 'warn');
+    return;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'get-summary-queue-stats' });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    const stats = response.stats;
+
+    // Update queue statistics display
+    queueLength.textContent = stats.queueLength || 0;
+    queueCompleted.textContent = stats.completed || 0;
+    queueFailed.textContent = stats.failed || 0;
+
+    // Update queue status
+    if (stats.isProcessing) {
+      queueStatusText.textContent = 'Processing';
+      queueStatusIndicator.className = 'status-indicator status-loading';
+    } else if (stats.queueLength > 0) {
+      queueStatusText.textContent = 'Waiting';
+      queueStatusIndicator.className = 'status-indicator status-offline';
+    } else {
+      queueStatusText.textContent = 'Idle';
+      queueStatusIndicator.className = 'status-indicator status-online';
+    }
+
+    // Show/hide currently processing section
+    if (stats.currentlyProcessing) {
+      const proc = stats.currentlyProcessing;
+      processingDetails.innerHTML = `
+        <strong>${escapeHtml(proc.title)}</strong><br>
+        <span style="color: #7dd3fc;">${escapeHtml(proc.domain)}</span> •
+        <span>Attempt ${proc.attempt}/${proc.maxAttempts}</span><br>
+        <small style="color: #94a3b8;">${escapeHtml(proc.url)}</small>
+      `;
+      currentlyProcessing.style.display = 'block';
+    } else {
+      currentlyProcessing.style.display = 'none';
+    }
+
+    log(`Queue stats: ${stats.queueLength} queued, ${stats.completed} completed, ${stats.failed} failed`, 'info');
+
+  } catch (error) {
+    console.error('[DEBUG] Failed to refresh queue stats:', error);
+    log(`Failed to refresh queue stats: ${error.message}`, 'error');
+  }
+}
+
+async function handleProcessQueue() {
+  if (!isConnected) {
+    log('Cannot process queue - not connected', 'warn');
+    return;
+  }
+
+  try {
+    log('Starting queue processing...', 'info');
+    const response = await chrome.runtime.sendMessage({ type: 'process-summary-queue' });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    log(response.message || 'Queue processing started', 'info');
+
+    // Refresh stats after a short delay
+    setTimeout(() => {
+      handleRefreshQueueStats();
+    }, 1000);
+
+  } catch (error) {
+    console.error('[DEBUG] Failed to process queue:', error);
+    log(`Failed to process queue: ${error.message}`, 'error');
+  }
+}
+
+async function handleClearQueue() {
+  if (!confirm('Are you sure you want to clear the summarization queue? This will remove all pending summarization tasks.')) {
+    return;
+  }
+
+  if (!isConnected) {
+    log('Cannot clear queue - not connected', 'warn');
+    return;
+  }
+
+  try {
+    log('Clearing summarization queue...', 'warn');
+    const response = await chrome.runtime.sendMessage({ type: 'clear-summary-queue' });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    log(response.message || 'Queue cleared', 'warn');
+
+    // Refresh stats immediately
+    await handleRefreshQueueStats();
+
+  } catch (error) {
+    console.error('[DEBUG] Failed to clear queue:', error);
+    log(`Failed to clear queue: ${error.message}`, 'error');
+  }
+}
+
+// Auto-refresh queue stats periodically
+setInterval(() => {
+  if (isConnected) {
+    handleRefreshQueueStats();
+  }
+}, 10000); // Every 10 seconds
+
 // Export for debugging
 window.debugPageController = {
   refreshStatistics,
   connectToOffscreen,
   currentLogs,
   isConnected,
-  handleTestSearchModes
+  handleTestSearchModes,
+  handleRefreshQueueStats,
+  handleProcessQueue,
+  handleClearQueue
 };

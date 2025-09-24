@@ -17,6 +17,8 @@ let resultsList;
 let loadMoreButton;
 let toggleRemoteWarm;
 let modelStatusEl;
+let processingStatus;
+let processingDetails;
 
 // State
 let currentQuery = '';
@@ -26,6 +28,8 @@ let isLoading = false;
 let hasMoreResults = false;
 let lastBatch = [];
 let isAutoLoading = false;
+let isProcessingPages = false;
+let queueStatusInterval = null;
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeSearchPage);
@@ -46,6 +50,8 @@ function initializeSearchPage() {
   loadMoreButton = document.getElementById('loadMoreButton');
   toggleRemoteWarm = document.getElementById('toggleRemoteWarm');
   modelStatusEl = document.getElementById('modelStatus');
+  processingStatus = document.getElementById('processingStatus');
+  processingDetails = document.getElementById('processingDetails');
 
   if (!searchInput) {
     console.error('[SEARCH] Required DOM elements not found');
@@ -67,6 +73,9 @@ function initializeSearchPage() {
 
   // Host-permissions onboarding
   setupPermissionsOnboarding();
+
+  // Start monitoring summarization queue
+  startQueueMonitoring();
 
 }
 
@@ -758,9 +767,116 @@ function setSelectedSearchMode(mode) {
   }
 }
 
+// Queue monitoring functions
+async function startQueueMonitoring() {
+  // Initial check
+  await checkQueueStatus();
+
+  // Set up periodic checking
+  queueStatusInterval = setInterval(checkQueueStatus, 5000); // Check every 5 seconds
+}
+
+async function checkQueueStatus() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'get-summary-queue-stats' });
+
+    if (response && response.stats) {
+      const stats = response.stats;
+      const wasProcessing = isProcessingPages;
+
+      isProcessingPages = stats.isProcessing || (stats.queueLength > 0);
+
+      if (isProcessingPages) {
+        showProcessingStatus(stats);
+        disableSearchInput();
+      } else {
+        hideProcessingStatus();
+        enableSearchInput();
+      }
+
+      // If processing just finished, refresh the search to show updated summaries
+      if (wasProcessing && !isProcessingPages && currentQuery) {
+        console.log('[SEARCH] Processing finished, refreshing search results');
+        // Small delay to ensure database is updated
+        setTimeout(() => {
+          performSearch(currentQuery, 0, true);
+        }, 1000);
+      }
+    }
+  } catch (error) {
+    console.error('[SEARCH] Failed to check queue status:', error);
+  }
+}
+
+function showProcessingStatus(stats) {
+  if (!processingStatus || !processingDetails) return;
+
+  const queuedCount = stats.queueLength || 0;
+  const completedCount = stats.completed || 0;
+  const failedCount = stats.failed || 0;
+
+  let details = `Queued: ${queuedCount}`;
+  if (completedCount > 0) details += `, Completed: ${completedCount}`;
+  if (failedCount > 0) details += `, Failed: ${failedCount}`;
+
+  // Show currently processing item if available
+  if (stats.currentlyProcessing) {
+    const proc = stats.currentlyProcessing;
+    processingDetails.innerHTML = `
+      <div>Processing: <strong>${escapeHtml(proc.title)}</strong></div>
+      <div>${details}</div>
+    `;
+  } else {
+    processingDetails.textContent = details;
+  }
+
+  processingStatus.classList.remove('hidden');
+}
+
+function hideProcessingStatus() {
+  if (!processingStatus) return;
+  processingStatus.classList.add('hidden');
+}
+
+function disableSearchInput() {
+  if (searchInput) {
+    searchInput.disabled = true;
+    searchInput.placeholder = 'Processing pages... Search will be available when complete.';
+  }
+  if (searchButton) {
+    searchButton.disabled = true;
+  }
+}
+
+function enableSearchInput() {
+  if (searchInput) {
+    searchInput.disabled = false;
+    searchInput.placeholder = 'Search your browsing history...';
+  }
+  if (searchButton) {
+    searchButton.disabled = false;
+  }
+}
+
+// Utility function to escape HTML
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  if (queueStatusInterval) {
+    clearInterval(queueStatusInterval);
+  }
+});
+
 // Export for debugging
 window.searchPageController = {
   performSearch,
   currentResults,
-  currentQuery
+  currentQuery,
+  checkQueueStatus,
+  isProcessingPages
 };

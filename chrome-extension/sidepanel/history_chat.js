@@ -16,11 +16,15 @@ let advancedToggleChat;
 let advancedPanelChat;
 let toggleRemoteWarmChat;
 let modelStatusChat;
+let processingStatusChat;
+let processingDetailsChat;
 
 // State
 let isGenerating = false;
 let chatHistory = [];
 let aiSession = null;
+let isProcessingPages = false;
+let queueStatusInterval = null;
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeChatPage);
@@ -40,6 +44,8 @@ function initializeChatPage() {
   advancedPanelChat = document.getElementById('advancedPanelChat');
   toggleRemoteWarmChat = document.getElementById('toggleRemoteWarmChat');
   modelStatusChat = document.getElementById('modelStatusChat');
+  processingStatusChat = document.getElementById('processingStatusChat');
+  processingDetailsChat = document.getElementById('processingDetailsChat');
 
   if (!chatMessages || !chatInput) {
     console.error('[CHAT] Required DOM elements not found');
@@ -65,6 +71,9 @@ function initializeChatPage() {
 
   // Host-permissions onboarding
   setupPermissionsOnboarding();
+
+  // Start monitoring summarization queue
+  startQueueMonitoring();
   
 }
 
@@ -655,9 +664,111 @@ function closeChatSettingsDropdown() {
   advancedToggleChat.classList.remove('active');
 }
 
+// Queue monitoring functions (similar to search page)
+async function startQueueMonitoring() {
+  // Initial check
+  await checkQueueStatus();
+
+  // Set up periodic checking
+  queueStatusInterval = setInterval(checkQueueStatus, 5000); // Check every 5 seconds
+}
+
+async function checkQueueStatus() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'get-summary-queue-stats' });
+
+    if (response && response.stats) {
+      const stats = response.stats;
+      isProcessingPages = stats.isProcessing || (stats.queueLength > 0);
+
+      if (isProcessingPages) {
+        showProcessingStatusChat(stats);
+        disableChatInput();
+      } else {
+        hideProcessingStatusChat();
+        enableChatInput();
+      }
+    }
+  } catch (error) {
+    console.error('[CHAT] Failed to check queue status:', error);
+  }
+}
+
+function showProcessingStatusChat(stats) {
+  if (!processingStatusChat || !processingDetailsChat) return;
+
+  const queuedCount = stats.queueLength || 0;
+  const completedCount = stats.completed || 0;
+  const failedCount = stats.failed || 0;
+
+  let details = `Queued: ${queuedCount}`;
+  if (completedCount > 0) details += `, Completed: ${completedCount}`;
+  if (failedCount > 0) details += `, Failed: ${failedCount}`;
+
+  // Show currently processing item if available
+  if (stats.currentlyProcessing) {
+    const proc = stats.currentlyProcessing;
+    processingDetailsChat.innerHTML = `
+      <div>Processing: <strong>${escapeHtmlChat(proc.title)}</strong></div>
+      <div>${details}</div>
+    `;
+  } else {
+    processingDetailsChat.textContent = details;
+  }
+
+  processingStatusChat.classList.remove('hidden');
+}
+
+function hideProcessingStatusChat() {
+  if (!processingStatusChat) return;
+  processingStatusChat.classList.add('hidden');
+}
+
+function disableChatInput() {
+  if (chatInput && !isGenerating) {
+    chatInput.disabled = true;
+    chatInput.placeholder = 'Processing pages... Chat will be available when complete.';
+  }
+  if (sendButton && !isGenerating) {
+    sendButton.disabled = true;
+  }
+  if (statusText) {
+    statusText.textContent = 'Processing pages...';
+  }
+}
+
+function enableChatInput() {
+  if (chatInput && !isGenerating) {
+    chatInput.disabled = false;
+    chatInput.placeholder = 'Ask about your browsing history...';
+  }
+  if (sendButton && !isGenerating) {
+    sendButton.disabled = false;
+  }
+  if (statusText && !isGenerating) {
+    statusText.textContent = 'Ready to chat';
+  }
+}
+
+// Additional escape function to avoid conflicts
+function escapeHtmlChat(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  if (queueStatusInterval) {
+    clearInterval(queueStatusInterval);
+  }
+});
+
 // Export for debugging
 window.chatPageController = {
   generateResponse,
   chatHistory,
-  aiSession
+  aiSession,
+  checkQueueStatus,
+  isProcessingPages
 };

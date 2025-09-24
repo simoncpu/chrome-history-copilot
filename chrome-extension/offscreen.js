@@ -17,6 +17,17 @@ let modelStatus = {
 let isInitialized = false;
 let aiPrefs = { enableReranker: false, enableRemoteWarm: false };
 
+// Summarization queue state
+let summarizationQueue = [];
+let isProcessingSummaries = false;
+let summaryQueueStats = {
+  queued: 0,
+  processing: 0,
+  completed: 0,
+  failed: 0,
+  currentlyProcessing: null
+};
+
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
@@ -142,6 +153,24 @@ async function handleMessage(message, sendResponse) {
         } catch (e) {
           sendResponse({ error: e.message });
         }
+        break;
+
+      case 'get-summary-queue-stats':
+        sendResponse({ status: 'ok', stats: getSummaryQueueStats() });
+        break;
+
+      case 'process-summary-queue':
+        try {
+          processSummaryQueue();
+          sendResponse({ status: 'ok', message: 'Summary queue processing started' });
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
+        break;
+
+      case 'clear-summary-queue':
+        clearSummaryQueue();
+        sendResponse({ status: 'ok', message: 'Summary queue cleared' });
         break;
 
       default:
@@ -729,14 +758,19 @@ async function ingestPage(pageInfo) {
       summary: null
     };
 
-    // Prepare summary
-    // If we don't have a summary yet, try to generate one offscreen (no user interaction)
+    // Prepare summary - queue for later processing if needed
     let summary = content.summary;
     if (!summary) {
-      summary = await trySummarizeOffscreen(content.text, pageInfo.url, content.title);
-    }
-    if (!summary) {
       summary = buildFallbackSummary(content.text, content.title, pageInfo.url);
+      // Queue for AI summarization if content is substantial
+      if (content.text && content.text.trim().length > 100) {
+        queueForSummarization(pageInfo.url, {
+          text: content.text,
+          title: content.title,
+          url: pageInfo.url,
+          domain: new URL(pageInfo.url).hostname
+        });
+      }
     }
 
     // Generate embedding for content (always create one for sqlite-vec compatibility)
@@ -770,13 +804,19 @@ async function ingestPage(pageInfo) {
 async function ingestCapturedContent(capturedData) {
 
   try {
-    // Generate summary if missing
+    // Generate summary - queue for later processing if needed
     let summary = capturedData.summary;
     if (!summary) {
-      summary = await trySummarizeOffscreen(capturedData.text || '', capturedData.url, capturedData.title);
-    }
-    if (!summary) {
       summary = buildFallbackSummary(capturedData.text || '', capturedData.title || '', capturedData.url);
+      // Queue for AI summarization if content is substantial
+      if (capturedData.text && capturedData.text.trim().length > 100) {
+        queueForSummarization(capturedData.url, {
+          text: capturedData.text,
+          title: capturedData.title,
+          url: capturedData.url,
+          domain: capturedData.domain
+        });
+      }
     }
 
     // Generate embedding
@@ -1160,7 +1200,168 @@ async function importDatabase(data) {
   };
 }
 
+// Summarization queue functions
+function queueForSummarization(url, data) {
+  console.log(`[SUMMARIZATION] Queueing page for summarization: ${url}`);
+  console.table({ url, title: data.title, domain: data.domain, contentLength: data.text?.length || 0 });
+
+  // Check if already in queue
+  const existing = summarizationQueue.find(item => item.url === url);
+  if (existing) {
+    console.log(`[SUMMARIZATION] Page already in queue: ${url}`);
+    return;
+  }
+
+  const queueItem = {
+    id: Date.now() + Math.random(), // Simple unique ID
+    url,
+    data,
+    timestamp: Date.now(),
+    attempts: 0,
+    maxAttempts: 3
+  };
+
+  summarizationQueue.push(queueItem);
+  summaryQueueStats.queued = summarizationQueue.length;
+
+  console.log(`[SUMMARIZATION] Queue updated. Total queued: ${summarizationQueue.length}`);
+
+  // Start processing if not already running
+  if (!isProcessingSummaries) {
+    processSummaryQueue();
+  }
+}
+
+function getSummaryQueueStats() {
+  const stats = {
+    ...summaryQueueStats,
+    queueLength: summarizationQueue.length,
+    isProcessing: isProcessingSummaries
+  };
+
+  console.log(`[SUMMARIZATION] Queue Stats:`, stats);
+  if (summarizationQueue.length > 0) {
+    console.log(`[SUMMARIZATION] Queued items:`, summarizationQueue.map(item => ({
+      url: item.url,
+      title: item.data.title,
+      domain: item.data.domain,
+      attempts: item.attempts
+    })));
+  }
+
+  return stats;
+}
+
+function clearSummaryQueue() {
+  console.log(`[SUMMARIZATION] Clearing queue with ${summarizationQueue.length} items`);
+  summarizationQueue = [];
+  summaryQueueStats = {
+    queued: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0,
+    currentlyProcessing: null
+  };
+}
+
+async function processSummaryQueue() {
+  if (isProcessingSummaries) {
+    console.log('[SUMMARIZATION] Queue processing already in progress');
+    return;
+  }
+
+  if (summarizationQueue.length === 0) {
+    console.log('[SUMMARIZATION] No items in queue to process');
+    return;
+  }
+
+  isProcessingSummaries = true;
+  console.log(`[SUMMARIZATION] Starting queue processing. ${summarizationQueue.length} items to process`);
+  console.group('📝 Summarization Queue Processing');
+
+  while (summarizationQueue.length > 0) {
+    const item = summarizationQueue.shift();
+    summaryQueueStats.queued = summarizationQueue.length;
+    summaryQueueStats.currentlyProcessing = {
+      url: item.url,
+      title: item.data.title || 'Untitled',
+      domain: item.data.domain || '',
+      attempt: item.attempts + 1,
+      maxAttempts: item.maxAttempts
+    };
+
+    console.log(`[SUMMARIZATION] Processing: ${item.url} (attempt ${item.attempts + 1}/${item.maxAttempts})`);
+
+    try {
+      summaryQueueStats.processing++;
+
+      // Try to generate AI summary
+      const aiSummary = await trySummarizeOffscreen(
+        item.data.text,
+        item.data.url,
+        item.data.title
+      );
+
+      if (aiSummary && typeof aiSummary === 'string' && aiSummary.trim().length > 0) {
+        // Update database with the AI-generated summary
+        const updateResult = await db.updateSummaryByUrl(item.url, aiSummary);
+
+        if (updateResult && updateResult.success) {
+          console.log(`[SUMMARIZATION] ✅ Successfully updated summary for: ${item.url}`);
+          summaryQueueStats.completed++;
+        } else {
+          console.warn(`[SUMMARIZATION] ⚠️ Failed to update database for: ${item.url}`, updateResult);
+          summaryQueueStats.failed++;
+        }
+      } else {
+        // AI summarization failed, but don't retry - fallback summary already exists
+        console.log(`[SUMMARIZATION] ℹ️ AI summarization unavailable for: ${item.url}, keeping fallback summary`);
+        summaryQueueStats.failed++;
+      }
+
+    } catch (error) {
+      console.error(`[SUMMARIZATION] ❌ Error processing ${item.url}:`, error);
+
+      item.attempts++;
+      if (item.attempts < item.maxAttempts) {
+        console.log(`[SUMMARIZATION] 🔄 Retrying ${item.url} (attempt ${item.attempts + 1}/${item.maxAttempts})`);
+        // Add back to end of queue for retry
+        summarizationQueue.push(item);
+        summaryQueueStats.queued = summarizationQueue.length;
+      } else {
+        console.error(`[SUMMARIZATION] 💀 Max attempts reached for: ${item.url}`);
+        summaryQueueStats.failed++;
+      }
+    }
+
+    summaryQueueStats.currentlyProcessing = null;
+
+    // Add a small delay between processing items to avoid overwhelming the AI API
+    if (summarizationQueue.length > 0) {
+      console.log(`[SUMMARIZATION] Waiting 2s before next item... (${summarizationQueue.length} remaining)`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+  isProcessingSummaries = false;
+  summaryQueueStats.queued = 0;
+
+  console.log(`[SUMMARIZATION] ✅ Queue processing completed. Stats:`, {
+    completed: summaryQueueStats.completed,
+    failed: summaryQueueStats.failed
+  });
+  console.groupEnd();
+}
+
 // Initialize on load
 initialize().catch(error => {
   console.error('[OFFSCREEN] Failed to initialize:', error);
 });
+
+// Start summary queue processing periodically
+setInterval(() => {
+  if (!isProcessingSummaries && summarizationQueue.length > 0) {
+    console.log('[SUMMARIZATION] Periodic check: starting queue processing');
+    processSummaryQueue();
+  }
+}, 30000); // Check every 30 seconds

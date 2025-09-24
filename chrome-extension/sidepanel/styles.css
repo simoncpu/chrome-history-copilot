@@ -1021,8 +1021,14 @@ body::before {
 }
 
 .result-item {
+  animation: organicFadeIn 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.result-link {
   display: flex;
-  gap: 16px;
+  flex-direction: column;
+  width: 100%;
+  gap: 8px;
   padding: 18px 20px;
   background: linear-gradient(135deg,
     rgba(255, 255, 255, 0.92) 0%,
@@ -1041,11 +1047,10 @@ body::before {
   backdrop-filter: blur(12px);
   position: relative;
   overflow: hidden;
-  animation: organicFadeIn 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
   transform-style: preserve-3d;
 }
 
-.result-item::before {
+.result-link::before {
   content: '';
   position: absolute;
   top: 0;
@@ -1061,7 +1066,7 @@ body::before {
   border-radius: inherit;
 }
 
-.result-item::after {
+.result-link::after {
   content: '';
   position: absolute;
   top: -2px;
@@ -1078,15 +1083,15 @@ body::before {
   transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.result-item:hover::before {
+.result-link:hover::before {
   opacity: 1;
 }
 
-.result-item:hover::after {
+.result-link:hover::after {
   opacity: 1;
 }
 
-.result-item:hover {
+.result-link:hover {
   box-shadow:
     0 12px 40px rgba(125, 211, 252, 0.15),
     0 6px 20px rgba(0, 0, 0, 0.08),
@@ -1096,15 +1101,6 @@ body::before {
     rgba(255, 255, 255, 0.95) 0%,
     rgba(240, 249, 255, 0.90) 35%,
     rgba(255, 247, 237, 0.88) 100%);
-}
-
-.result-link {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  gap: 8px;
-  text-decoration: none;
-  color: inherit;
 }
 
 .result-header-row {
@@ -1131,7 +1127,7 @@ body::before {
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.result-item:hover .result-favicon {
+.result-link:hover .result-favicon {
   transform: scale(1.08) rotate(2deg);
   box-shadow:
     0 4px 16px rgba(125, 211, 252, 0.15),

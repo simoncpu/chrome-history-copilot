@@ -429,12 +429,14 @@
 
       <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 13px;">
         <strong>AI History Extension Schema:</strong><br>
-        • <code>pages</code> - Main table (sqlite-vec virtual table with 384-dim embeddings)<br>
-        • <code>pages_fts</code> - FTS5 virtual table for full-text search<br>
-        • Storage: IndexedDB VFS<br>
-        • Key columns: title, url, domain, content_text, embedding, visit_count, last_visit_at<br>
+        • <code>pages</code> - Main PostgreSQL table with integrated vector column (pgvector 384-dim embeddings)<br>
+        • <code>content_tsvector</code> - PostgreSQL full-text search using tsvector/tsquery with GIN indexes<br>
+        • Storage: PGlite with IndexedDB persistence (key: ai-history-pglite)<br>
+        • Key columns: title, url, domain, content_text, embedding::vector(384), content_tsvector, visit_count, last_visit_at<br>
+        • Vector search: pgvector cosine similarity (<=> operator)<br>
+        • Text search: PostgreSQL ts_rank with automatic tsvector updates via triggers<br>
         <strong>Content Extraction:</strong> Real-time via content scripts on navigation<br>
-        <strong>Tip:</strong> Use "Sample Queries" for extension-specific examples.
+        <strong>Tip:</strong> Use "Sample Queries" for PostgreSQL-specific examples.
       </div>
 
       <div class="checkbox-container">

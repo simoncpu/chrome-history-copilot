@@ -48,8 +48,10 @@
     {
       "resources": [
         "lib/*.wasm",
-        "lib/transformers.min.js",
-        "lib/sqlite3.mjs",
+        "lib/*.data",
+        "lib/*.js",
+        "lib/*.tar.gz",
+        "lib/vector/**",
         "lib/models/**"
       ],
       "matches": ["<all_urls>"]

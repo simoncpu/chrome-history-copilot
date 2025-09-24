@@ -1,6 +1,6 @@
 /**
  * AI-Powered Browser History - Offscreen Document
- * Handles SQLite database, embeddings, and heavy processing tasks
+ * Handles PGlite database, embeddings, and heavy processing tasks
  */
 
 // Initialize offscreen document
@@ -83,7 +83,7 @@ async function handleMessage(message, sendResponse) {
         break;
 
       case 'page-exists':
-        const exists = db.pageExists(message.data.url);
+        const exists = await db.pageExists(message.data.url);
         sendResponse({ exists });
         break;
 
@@ -228,118 +228,150 @@ async function refreshAiPrefs() {
 // Database initialization
 async function initializeDatabase() {
   try {
-    // Prepare sqlite3 config to suppress harmless OPFS warning during init
-    // This warning appears when running on the main thread where Atomics.wait isn't allowed.
-    // We use IndexedDB VFS, so it's expected and safe to ignore.
-    globalThis.sqlite3ApiConfig = Object.assign({}, globalThis.sqlite3ApiConfig, {
-      warn: (...args) => {
-        const message = args.join(' ');
-        if (message.includes('Ignoring inability to install OPFS sqlite3_vfs')) {
-          return; // suppress benign OPFS warning
-        }
-        console.warn('[SQLITE]', ...args);
+    console.log('[DB] Initializing PGlite database with IndexedDB storage');
+
+    // Import PGlite and vector extension
+    const { PGlite } = await import(chrome.runtime.getURL('lib/pglite.js'));
+    const { vector } = await import(chrome.runtime.getURL('lib/vector/index.js'));
+
+    // Initialize PGlite with IndexedDB storage and vector extension
+    const pglite = new PGlite({
+      dataDir: 'idb://ai-history-pglite',
+      extensions: {
+        vector,
       }
+      // Note: IndexedDB VFS is automatically selected when using 'idb://' dataDir
     });
 
-    // Import sqlite3 module
-    const sqlite3InitModule = (await import(chrome.runtime.getURL('lib/sqlite3.mjs'))).default;
+    // Wait for database to be ready
+    await pglite.waitReady;
 
-    const sqlite3 = await sqlite3InitModule({
-      print: () => {},
-      printErr: (...args) => {
-        // Filter out harmless OPFS warning since we use IndexedDB VFS
-        const message = args.join(' ');
-        if (message.includes('Ignoring inability to install OPFS sqlite3_vfs')) {
-          return;
-        }
-        console.error('[SQLITE]', ...args);
-      },
-    });
+    // Enable pgvector extension
+    await pglite.exec('CREATE EXTENSION IF NOT EXISTS vector');
 
-    // Use IndexedDB VFS (default)
-    const dbPath = '/ai-history.db';
-    const sqliteDb = new sqlite3.oo1.DB(dbPath, 'c');
+    console.log('[DB] ✅ Using IndexedDB storage - safe for Chrome extension');
 
     // Create database wrapper with our API
-    db = new DatabaseWrapper(sqliteDb, sqlite3);
+    db = new DatabaseWrapper(pglite);
 
     // Initialize schema
     await db.initializeSchema();
 
+    console.log('[DB] Database initialized successfully');
+
   } catch (error) {
-    console.error('[DB] Failed to initialize SQLite:', error);
+    console.error('[DB] Failed to initialize PGlite:', error);
     throw new Error(`Database initialization failed: ${error.message}`);
   }
 }
 
 // Database wrapper class
 class DatabaseWrapper {
-  constructor(sqliteDb, sqlite3) {
-    this.db = sqliteDb;
-    this.sqlite3 = sqlite3;
+  constructor(pglite) {
+    this.db = pglite;
     this.initialized = true;
-    this._vecSupport = true; // Assume vec support is always available
+    this._vecSupport = true; // pgvector is always available
   }
 
-  updateSummaryByUrl(url, summary) {
+  async updateSummaryByUrl(url, summary) {
     if (!url) return { error: 'Missing URL' };
-    const sel = this.db.prepare('SELECT id FROM pages WHERE url = ? LIMIT 1');
-    sel.bind([url]);
-    let id = null;
-    if (sel.step()) {
-      id = sel.get(0);
-    }
-    sel.finalize();
-    if (!id) return { success: false, updated: 0 };
 
-    const isString = typeof summary === 'string';
-    const normalized = isString ? summary : null;
-    const upd = this.db.prepare('UPDATE pages SET summary = ? WHERE id = ?');
-    upd.bind([normalized, id]);
-    upd.step();
-    upd.finalize();
-    return { success: true, updated: 1, id };
+    try {
+      const result = await this.db.query('SELECT id FROM pages WHERE url = $1 LIMIT 1', [url]);
+      if (result.rows.length === 0) {
+        return { success: false, updated: 0 };
+      }
+
+      const id = result.rows[0].id;
+      const normalized = typeof summary === 'string' ? summary : null;
+
+      await this.db.query('UPDATE pages SET summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [normalized, id]);
+
+      return { success: true, updated: 1, id };
+    } catch (error) {
+      console.error('[DB] Update summary failed:', error);
+      return { error: error.message };
+    }
   }
 
-  pageExists(url) {
+  async pageExists(url) {
     if (!url) return false;
-    const sel = this.db.prepare('SELECT id FROM pages WHERE url = ? LIMIT 1');
-    sel.bind([url]);
-    let exists = false;
-    if (sel.step()) {
-      exists = true;
+
+    try {
+      const result = await this.db.query('SELECT id FROM pages WHERE url = $1 LIMIT 1', [url]);
+      return result.rows.length > 0;
+    } catch (error) {
+      console.error('[DB] Page exists check failed:', error);
+      return false;
     }
-    sel.finalize();
-    return exists;
   }
 
   async initializeSchema() {
-    // Assume sqlite-vec and FTS5 are always available
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS pages USING vec0(
-        id INTEGER PRIMARY KEY,
-        url TEXT,
+    // Create main pages table with vector column
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS pages (
+        id SERIAL PRIMARY KEY,
+        url TEXT UNIQUE NOT NULL,
         domain TEXT,
         title TEXT,
         content_text TEXT,
         summary TEXT,
         favicon_url TEXT,
-        first_visit_at INTEGER,
-        last_visit_at INTEGER,
-        visit_count INTEGER,
-        embedding FLOAT[384]
+        first_visit_at BIGINT,
+        last_visit_at BIGINT,
+        visit_count INTEGER DEFAULT 1,
+        embedding vector(384),
+        content_tsvector tsvector,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // Create indexes for efficient search
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
+      CREATE INDEX IF NOT EXISTS idx_pages_last_visit ON pages(last_visit_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_pages_visit_count ON pages(visit_count DESC);
+      CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
+    `);
+
+    // Vector similarity search index (IVFFlat for datasets)
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_pages_embedding
+        ON pages USING ivfflat (embedding vector_cosine_ops)
+        WITH (lists = 100);
+    `);
+
+    // Full-text search index
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_pages_fts
+        ON pages USING gin(content_tsvector);
+    `);
+
+    // Trigger to automatically update tsvector on insert/update
+    await this.db.exec(`
+      CREATE OR REPLACE FUNCTION update_content_tsvector()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.content_tsvector :=
+          setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
+          setweight(to_tsvector('english', COALESCE(NEW.content_text, '')), 'B');
+        NEW.updated_at := CURRENT_TIMESTAMP;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+
+    // Drop trigger if exists and create new one (PostgreSQL doesn't support IF NOT EXISTS for triggers)
+    await this.db.exec(`
+      DROP TRIGGER IF EXISTS trig_update_content_tsvector ON pages;
+      CREATE TRIGGER trig_update_content_tsvector
+        BEFORE INSERT OR UPDATE ON pages
+        FOR EACH ROW
+        EXECUTE FUNCTION update_content_tsvector();
     `);
 
     this._isVecTable = true;
-
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-        id UNINDEXED,
-        title,
-        content_text
-      )
-    `);
   }
 
   async insert(table, data) {
@@ -351,124 +383,54 @@ class DatabaseWrapper {
   }
 
   async insertPage(pageData) {
-    if (this.hasVecSupport()) {
-      // For vec0 tables, we need to provide a valid embedding or skip the row
-      if (!pageData.embedding) {
-        console.warn('[DB] Skipping page without embedding for vec0 table:', pageData.url);
-        return { id: null };
-      }
+    // For pgvector, we need to provide a valid embedding or skip the row
+    if (!pageData.embedding) {
+      console.warn('[DB] Skipping page without embedding:', pageData.url);
+      return { id: null };
+    }
 
-      // Check if URL exists and update instead of inserting a duplicate
-      let existingId = null;
-      let existingVisitCount = 0;
-      let existingFirstVisit = null;
-      try {
-        const checkStmt = this.db.prepare('SELECT id, visit_count, first_visit_at FROM pages WHERE url = ? LIMIT 1');
-        checkStmt.bind([pageData.url]);
-        if (checkStmt.step()) {
-          existingId = checkStmt.get(0);
-          existingVisitCount = Number(checkStmt.get(1)) || 0;
-          existingFirstVisit = Number(checkStmt.get(2)) || pageData.first_visit_at;
-        }
-        checkStmt.finalize();
-      } catch (e) {
-        console.warn('[DB] Upsert check failed (vec0):', e);
-      }
+    try {
+      // Convert Float32Array to PostgreSQL array format
+      const embeddingArray = `[${Array.from(pageData.embedding).join(',')}]`;
+      const normalizedSummary = typeof pageData.summary === 'string' ? pageData.summary : null;
 
-      const embeddingJson = JSON.stringify(Array.from(pageData.embedding));
+      // Use PostgreSQL UPSERT (INSERT ... ON CONFLICT)
+      const result = await this.db.query(`
+        INSERT INTO pages (
+          url, domain, title, content_text, summary, favicon_url,
+          first_visit_at, last_visit_at, visit_count, embedding
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector)
+        ON CONFLICT (url) DO UPDATE SET
+          title = EXCLUDED.title,
+          content_text = EXCLUDED.content_text,
+          summary = EXCLUDED.summary,
+          domain = EXCLUDED.domain,
+          favicon_url = EXCLUDED.favicon_url,
+          last_visit_at = EXCLUDED.last_visit_at,
+          visit_count = pages.visit_count + 1,
+          embedding = EXCLUDED.embedding,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING id
+      `, [
+        pageData.url || '',
+        pageData.domain || '',
+        pageData.title || '',
+        pageData.content_text || '',
+        normalizedSummary,
+        pageData.favicon_url || '',
+        pageData.first_visit_at,
+        pageData.last_visit_at,
+        pageData.visit_count || 1,
+        embeddingArray
+      ]);
 
-      if (existingId) {
-        const upd = this.db.prepare(`
-          UPDATE pages
-          SET domain = ?, title = ?, content_text = ?, summary = ?, favicon_url = ?,
-              last_visit_at = ?, visit_count = ?, embedding = ?
-          WHERE id = ?
-        `);
-        try {
-          const newVisit = existingVisitCount + 1;
-          // vec0 expects TEXT metadata columns to be TEXT, not NULL
-          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : '';
-          upd.bind([
-            pageData.domain || '',
-            pageData.title || '',
-            pageData.content_text || '',
-            normalizedSummary,
-            pageData.favicon_url || '',
-            pageData.last_visit_at,
-            newVisit,
-            embeddingJson,
-            existingId
-          ]);
-          upd.step();
-          upd.finalize();
+      const insertedId = result.rows[0]?.id;
+      console.log(`[DB] Page upserted successfully with ID: ${insertedId}`);
 
-          // Sync FTS5
-          try {
-            const ftsUpd = this.db.prepare(`
-              INSERT OR REPLACE INTO pages_fts (id, title, content_text)
-              VALUES (?, ?, ?)
-            `);
-            ftsUpd.bind([existingId, pageData.title, pageData.content_text]);
-            ftsUpd.step();
-            ftsUpd.finalize();
-          } catch (ftsError) {
-            console.warn('[DB] FTS5 update failed (update):', ftsError);
-          }
-
-          return { id: existingId };
-        } catch (error) {
-          upd.finalize();
-          throw error;
-        }
-      } else {
-        // Insert new
-        const stmt = this.db.prepare(`
-          INSERT INTO pages (url, domain, title, content_text, summary, favicon_url, first_visit_at, last_visit_at, visit_count, embedding)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        try {
-          // vec0 expects TEXT, not NULL, for metadata columns like summary
-          const normalizedSummary = (typeof pageData.summary === 'string') ? pageData.summary : '';
-          stmt.bind([
-            pageData.url || '',
-            pageData.domain || '',
-            pageData.title || '',
-            pageData.content_text || '',
-            normalizedSummary,
-            pageData.favicon_url || '',
-            pageData.first_visit_at,
-            pageData.last_visit_at,
-            pageData.visit_count,
-            embeddingJson
-          ]);
-          stmt.step();
-          stmt.finalize();
-
-          const insertedId = this.db.selectValue('SELECT last_insert_rowid()');
-
-          // Sync FTS5
-          try {
-            const ftsStmt = this.db.prepare(`
-              INSERT INTO pages_fts (id, title, content_text)
-              VALUES (?, ?, ?)
-            `);
-            ftsStmt.bind([insertedId, pageData.title, pageData.content_text]);
-            ftsStmt.step();
-            ftsStmt.finalize();
-          } catch (ftsError) {
-            console.warn('[DB] FTS5 update failed:', ftsError);
-          }
-
-          return { id: insertedId };
-        } catch (error) {
-          stmt.finalize();
-          throw error;
-        }
-      }
-    } else {
-      // Unreachable: vec support is assumed always available
-      throw new Error('vec0 support required');
+      return { id: insertedId };
+    } catch (error) {
+      console.error('[DB] Insert page failed:', error);
+      throw error;
     }
   }
 
@@ -492,29 +454,49 @@ class DatabaseWrapper {
   }
 
   async textSearch(query, limit, offset = 0) {
-    // Assume FTS5 is available; use bm25
-    const colNames = ['id','url','domain','title','content_text','summary','favicon_url','first_visit_at','last_visit_at','visit_count','bm25_score','snippet'];
-    const stmt = this.db.prepare(`
-      SELECT 
-        p.id, p.url, p.domain, p.title, p.content_text, p.summary, p.favicon_url,
-        p.first_visit_at, p.last_visit_at, p.visit_count,
-        bm25(pages_fts) AS bm25_score,
-        snippet(pages_fts, 1, '<mark>', '</mark>', '...', 32) as snippet
-      FROM pages_fts
-      JOIN pages p ON p.id = pages_fts.id
-      WHERE pages_fts MATCH ?
-      ORDER BY bm25_score
-      LIMIT ? OFFSET ?
-    `);
+    try {
+      // Escape special characters and prepare query
+      const tsQuery = query.split(' ')
+        .filter(term => term.length > 0)
+        .map(term => `${term}:*`)
+        .join(' & ');
 
-    const results = [];
-    stmt.bind([query, limit, offset]);
-    while (stmt.step()) {
-      results.push(this.rowToObject(stmt, colNames));
+      const result = await this.db.query(`
+        SELECT
+          id, url, domain, title, content_text, summary, favicon_url,
+          first_visit_at, last_visit_at, visit_count,
+          ts_rank(content_tsvector, query) AS bm25_score,
+          ts_headline('english', content_text, query, 'MaxWords=32, MinWords=1, StartSel=<mark>, StopSel=</mark>') AS snippet
+        FROM pages,
+             plainto_tsquery('english', $1) AS query
+        WHERE content_tsvector @@ query
+        ORDER BY bm25_score DESC, last_visit_at DESC
+        LIMIT $2 OFFSET $3
+      `, [query, limit, offset]);
+
+      return result.rows;
+    } catch (error) {
+      console.error('[DB] Text search failed:', error);
+      // Fallback to ILIKE search
+      try {
+        const result = await this.db.query(`
+          SELECT
+            id, url, domain, title, content_text, summary, favicon_url,
+            first_visit_at, last_visit_at, visit_count,
+            0.5 AS bm25_score,
+            content_text AS snippet
+          FROM pages
+          WHERE title ILIKE $1 OR content_text ILIKE $1
+          ORDER BY last_visit_at DESC
+          LIMIT $2 OFFSET $3
+        `, [`%${query}%`, limit, offset]);
+
+        return result.rows;
+      } catch (fallbackError) {
+        console.error('[DB] Fallback text search failed:', fallbackError);
+        return [];
+      }
     }
-    stmt.finalize();
-
-    return results;
   }
 
   hasVecSupport() { return true; }
@@ -524,23 +506,27 @@ class DatabaseWrapper {
       throw new Error('Query embedding required for vector search');
     }
 
-    const colNames = ['id','url','domain','title','content_text','summary','favicon_url','first_visit_at','last_visit_at','visit_count','distance'];
-    const stmt = this.db.prepare(`
-      SELECT id, url, domain, title, content_text, summary, favicon_url,
-             first_visit_at, last_visit_at, visit_count, distance
-      FROM pages
-      WHERE embedding MATCH ?
-      ORDER BY distance
-      LIMIT ? OFFSET ?
-    `);
+    try {
+      // Convert Float32Array to PostgreSQL array format
+      const embeddingArray = `[${Array.from(queryEmbedding).join(',')}]`;
 
-    const results = [];
-    stmt.bind([JSON.stringify(Array.from(queryEmbedding)), limit, offset]);
-    while (stmt.step()) {
-      results.push(this.rowToObject(stmt, colNames));
+      const result = await this.db.query(`
+        SELECT
+          id, url, domain, title, content_text, summary, favicon_url,
+          first_visit_at, last_visit_at, visit_count,
+          1 - (embedding <=> $1::vector) AS similarity,
+          embedding <=> $1::vector AS distance
+        FROM pages
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector
+        LIMIT $2 OFFSET $3
+      `, [embeddingArray, limit, offset]);
+
+      return result.rows;
+    } catch (error) {
+      console.error('[DB] Vector search failed:', error);
+      return [];
     }
-    stmt.finalize();
-    return results;
   }
 
   async hybridSearch(query, queryEmbedding, limit, offset, mode) {
@@ -652,79 +638,53 @@ class DatabaseWrapper {
     return scored;
   }
 
-  rowToObject(stmt, columnNames = null) {
-    if (!columnNames) {
-      // If no column names provided, try to get them from the statement
-      try {
-        const obj = {};
-        const names = typeof stmt.getColumnNames === 'function'
-          ? stmt.getColumnNames([])
-          : (() => {
-              const n = (typeof stmt.columnCount === 'number') ? stmt.columnCount : 0;
-              const arr = [];
-              for (let i = 0; i < n; i++) arr.push(stmt.getColumnName(i));
-              return arr;
-            })();
-        for (let i = 0; i < names.length; i++) {
-          obj[names[i]] = stmt.get(i);
-        }
-        return obj;
-      } catch (error) {
-        // Fallback to basic object with indices
-        console.warn('[DB] Could not get column names, using indices:', error);
-        return {
-          column_0: stmt.get(0),
-          column_1: stmt.get(1),
-          column_2: stmt.get(2),
-          column_3: stmt.get(3),
-          column_4: stmt.get(4),
-          column_5: stmt.get(5)
-        };
-      }
-    } else {
-      // Use provided column names
-      const obj = {};
-      columnNames.forEach((name, i) => {
-        obj[name] = stmt.get(i);
-      });
-      return obj;
-    }
+  // This method is no longer needed with PGlite as it returns proper objects
+  // Keeping for compatibility but it's essentially a pass-through now
+  rowToObject(row, columnNames = null) {
+    return row;
   }
 
   async stats() {
-    const pageCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM pages');
-    pageCountStmt.step();
-    const pageCount = pageCountStmt.get(0);
-    pageCountStmt.finalize();
-
-    let embeddingCount = 0;
-    // For vec0 tables, count pages with non-null embeddings
     try {
-      const embeddingCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM pages WHERE embedding IS NOT NULL');
-      embeddingCountStmt.step();
-      embeddingCount = embeddingCountStmt.get(0);
-      embeddingCountStmt.finalize();
-    } catch (error) {
-      console.warn('[DB] Could not get embedding count:', error);
-    }
+      const result = await this.db.query(`
+        SELECT
+          COUNT(*) as page_count,
+          COUNT(embedding) as embedding_count
+        FROM pages
+      `);
 
-    return {
-      pageCount,
-      embeddingCount,
-      hasVecSupport: this.hasVecSupport()
-    };
+      const stats = result.rows[0];
+      return {
+        pageCount: parseInt(stats.page_count),
+        embeddingCount: parseInt(stats.embedding_count),
+        hasVecSupport: this.hasVecSupport()
+      };
+    } catch (error) {
+      console.error('[DB] Stats query failed:', error);
+      return {
+        pageCount: 0,
+        embeddingCount: 0,
+        hasVecSupport: this.hasVecSupport()
+      };
+    }
   }
 
   async clear() {
     // Clear all tables
     try {
-      this.db.exec('DELETE FROM pages_fts');
+      await this.db.exec('TRUNCATE TABLE pages RESTART IDENTITY CASCADE');
+      await this.db.exec('VACUUM');
     } catch (error) {
-      console.warn('[DB] Could not clear FTS table:', error);
+      console.error('[DB] Clear database failed:', error);
+      // Fallback to DELETE if TRUNCATE fails
+      try {
+        await this.db.exec('DELETE FROM pages');
+        await this.db.exec('VACUUM');
+      } catch (fallbackError) {
+        console.error('[DB] Fallback clear failed:', fallbackError);
+        throw fallbackError;
+      }
     }
-
-    this.db.exec('DELETE FROM pages');
-    this.db.exec('VACUUM');
   }
 }
 
@@ -1135,34 +1095,18 @@ async function executeSQL({ query, writeMode = false }) {
 
   try {
     // Basic safety check for write operations
-    const isWriteQuery = /^\s*(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\s+/i.test(query.trim());
+    const isWriteQuery = /^\s*(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\s+/i.test(query.trim());
     if (isWriteQuery && !writeMode) {
       return { error: 'Write operations require write mode to be enabled' };
     }
 
-    const results = [];
-
-    // Use prepared statement approach like working prototype
-    if (query.trim().toUpperCase().startsWith('SELECT')) {
-      // For SELECT queries, use prepared statement
-      const stmt = db.db.prepare(query);
-      try {
-        while (stmt.step()) {
-          const row = stmt.get({});
-          results.push(row);
-        }
-      } finally {
-        stmt.finalize();
-      }
-    } else {
-      // For non-SELECT queries, just execute
-      db.db.exec(query);
-    }
+    // Use PGlite query method
+    const result = await db.db.query(query);
 
     return {
       success: true,
-      results,
-      rowCount: results.length,
+      results: result.rows || [],
+      rowCount: result.rows ? result.rows.length : result.affectedRows || 0,
       query: query
     };
   } catch (error) {

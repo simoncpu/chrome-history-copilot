@@ -30,11 +30,11 @@ let logRefreshInterval = null;
 const SAMPLE_QUERIES = [
   // Basic inspection
   'SELECT * FROM pages LIMIT 5;',
-  'SELECT name, sql FROM sqlite_master WHERE type=\'table\';',
-  'PRAGMA table_info(pages);',
+  'SELECT tablename as name, schemaname FROM pg_tables WHERE schemaname = \'public\';',
+  '\\d pages',
 
   // Extension functionality checks
-  'SELECT vec_version();',
+  'SELECT extname, extversion FROM pg_extension WHERE extname = \'vector\';',
   'SELECT COUNT(*) as total_pages FROM pages;',
   'SELECT COUNT(*) as pages_with_embeddings FROM pages WHERE embedding IS NOT NULL;',
 
@@ -42,22 +42,26 @@ const SAMPLE_QUERIES = [
   'SELECT title, url, domain, last_visit_at, visit_count FROM pages ORDER BY last_visit_at DESC LIMIT 10;',
   'SELECT domain, COUNT(*) as page_count FROM pages GROUP BY domain ORDER BY page_count DESC LIMIT 10;',
 
-  // Search functionality testing
-  'SELECT title, url FROM pages_fts WHERE pages_fts MATCH \'AI\' LIMIT 5;',
-  'SELECT id, title, url FROM pages WHERE embedding IS NOT NULL LIMIT 5;',
+  // Search functionality testing (PostgreSQL FTS)
+  'SELECT title, url FROM pages WHERE content_tsvector @@ plainto_tsquery(\'english\', \'AI\') LIMIT 5;',
+  'SELECT id, title, url, embedding <=> \'[0.1,0.2,0.3]\' AS distance FROM pages WHERE embedding IS NOT NULL LIMIT 5;',
 
   // Extension debugging
-  'SELECT COUNT(*) as fts_entries FROM pages_fts;',
-  'SELECT url, title, length(content_text) as content_length FROM pages WHERE content_text IS NOT NULL LIMIT 5;',
+  'SELECT COUNT(*) as pages_with_tsvector FROM pages WHERE content_tsvector IS NOT NULL;',
+  'SELECT url, title, char_length(content_text) as content_length FROM pages WHERE content_text IS NOT NULL LIMIT 5;',
 
   // Content extraction analysis
-  'SELECT url, title, length(content_text) as content_len, summary IS NOT NULL as has_summary FROM pages WHERE content_text IS NOT NULL ORDER BY last_visit_at DESC LIMIT 10;',
-  'SELECT domain, COUNT(*) as pages, AVG(length(content_text)) as avg_content_len FROM pages WHERE content_text IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10;',
-  'SELECT COUNT(*) as with_content, (SELECT COUNT(*) FROM pages) as total FROM pages WHERE content_text IS NOT NULL AND length(content_text) > 100;',
+  'SELECT url, title, char_length(content_text) as content_len, summary IS NOT NULL as has_summary FROM pages WHERE content_text IS NOT NULL ORDER BY last_visit_at DESC LIMIT 10;',
+  'SELECT domain, COUNT(*) as pages, AVG(char_length(content_text)) as avg_content_len FROM pages WHERE content_text IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10;',
+  'SELECT COUNT(*) as with_content, (SELECT COUNT(*) FROM pages) as total FROM pages WHERE content_text IS NOT NULL AND char_length(content_text) > 100;',
 
   // Performance analysis
   'SELECT domain, AVG(visit_count) as avg_visits, COUNT(*) as pages FROM pages GROUP BY domain HAVING COUNT(*) > 1 ORDER BY avg_visits DESC LIMIT 10;',
-  'SELECT title, url, visit_count FROM pages ORDER BY visit_count DESC LIMIT 10;'
+  'SELECT title, url, visit_count FROM pages ORDER BY visit_count DESC LIMIT 10;',
+
+  // Vector search examples
+  'SELECT title, url, 1 - (embedding <=> \'[0.1,0.2,0.3]\') AS similarity FROM pages WHERE embedding IS NOT NULL ORDER BY embedding <=> \'[0.1,0.2,0.3]\' LIMIT 5;',
+  'SELECT COUNT(*) as vector_indexed FROM pages WHERE embedding IS NOT NULL;'
 ];
 
 // Initialize when DOM is loaded

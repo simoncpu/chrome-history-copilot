@@ -14,7 +14,31 @@ PGlite is a lightweight PostgreSQL build compiled to WebAssembly (WASM) that run
 4. **pgvector Extension**: Production-ready vector similarity search with multiple index types
 5. **Better Type System**: Native support for arrays, JSON, and custom types
 
+## pgvector Extension Features
+
+The pgvector extension is included in the main PGlite package (bundle size: 42.9 KB) and provides comprehensive vector operations:
+
+### Supported Vector Types
+- **Single-precision vectors**: Standard 32-bit floating point
+- **Half-precision vectors**: 16-bit floating point for memory efficiency
+- **Binary vectors**: For binary embeddings
+- **Sparse vectors**: Optimized storage for vectors with many zero values
+
+### Distance Metrics
+- **L2 distance** (`<->` operator): Euclidean distance
+- **Inner product** (`<#>` operator): Dot product similarity
+- **Cosine distance** (`<=>` operator): Cosine similarity (most common for embeddings)
+- **L1 distance** (`<+>` operator): Manhattan distance
+- **Hamming distance**: For binary vectors
+- **Jaccard distance**: For set-based similarity
+
+### Search Capabilities
+- **Exact nearest neighbor search**: Guaranteed accurate results
+- **Approximate nearest neighbor search**: Faster search with index-based approximation
+
 ## Database Setup and Initialization
+
+**IMPORTANT**: Chrome extensions MUST use IndexedDB VFS only. Do NOT use OPFS (Origin Private File System) as it causes WebAssembly compilation issues in Chrome extension contexts.
 
 ```javascript
 import { PGlite } from '@electric-sql/pglite';
@@ -22,12 +46,20 @@ import { vector } from '@electric-sql/pglite/vector';
 
 // Initialize PGlite with pgvector extension and IndexedDB storage
 async function initDatabase() {
+  // Method 1: Simple dataDir prefix (recommended)
   const db = new PGlite({
-    dataDir: 'idb://ai-history-pglite',  // IndexedDB storage
+    dataDir: 'idb://ai-history-pglite',  // IndexedDB VFS auto-selected
     extensions: {
-      vector,  // Enable pgvector extension
+      vector,  // Enable pgvector extension (42.9 KB bundle size)
     }
   });
+
+  // Method 2: Explicit IdbFs (alternative approach)
+  // import { IdbFs } from '@electric-sql/pglite/idbfs';
+  // const db = new PGlite({
+  //   fs: new IdbFs('ai-history-pglite'),
+  //   extensions: { vector }
+  // });
 
   // Wait for database to be ready
   await db.waitReady;
@@ -38,6 +70,57 @@ async function initDatabase() {
   return db;
 }
 ```
+
+### pgvector Extension Setup
+
+The pgvector extension is automatically available when imported and passed to the extensions configuration. It provides all standard pgvector functionality including:
+
+- Vector data types and operations
+- Multiple distance metrics (L2, cosine, inner product, etc.)
+- Index support (IVFFlat, HNSW when available)
+- Both exact and approximate nearest neighbor search
+
+### Transformers.js Model Compatibility
+
+The current Transformers.js models are fully compatible with pgvector:
+
+**Local Model**: `Xenova/bge-small-en-v1.5-quantized`
+- Output dimension: 384 (matches `vector(384)` schema)
+- Type: Single-precision floating point (Float32Array)
+- Optimized for Chrome extensions with quantization
+
+**Remote Model**: `Xenova/bge-small-en-v1.5`
+- Output dimension: 384 (matches `vector(384)` schema)
+- Type: Single-precision floating point (Float32Array)
+- Full precision version for better accuracy
+
+Both models output 384-dimensional embeddings that are directly compatible with the pgvector `vector(384)` column type. The embeddings are normalized and use cosine similarity (`<=>` operator) for search, which is the standard approach for sentence embeddings.
+
+### Chrome Extension Storage Requirements
+
+PGlite provides two ways to configure IndexedDB VFS. For Chrome extensions, both methods work:
+
+**Method 1: dataDir prefix (recommended for simplicity)**
+```javascript
+const db = new PGlite('idb://my-database');
+```
+
+**Method 2: Explicit IdbFs import**
+```javascript
+import { PGlite } from '@electric-sql/pglite';
+import { IdbFs } from '@electric-sql/pglite/idbfs';
+
+const db = new PGlite({
+  fs: new IdbFs('my-database')
+});
+```
+
+**Chrome Extension Requirements:**
+- **MUST use**: One of the above IndexedDB VFS methods
+- **MUST NOT use**: OPFS or any filesystem other than IndexedDB
+- **Reason**: OPFS causes `WebAssembly.Module from an already read Response` errors in Chrome extensions
+- **Storage**: IndexedDB stores whole PostgreSQL files (one per table/index) as blobs
+- **Persistence**: Database automatically persists across browser sessions
 
 ## Schema Design
 
@@ -66,9 +149,19 @@ CREATE INDEX IF NOT EXISTS idx_pages_last_visit ON pages(last_visit_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pages_visit_count ON pages(visit_count DESC);
 
 -- Vector similarity search index (IVFFlat for large datasets)
-CREATE INDEX IF NOT EXISTS idx_pages_embedding
+-- pgvector supports multiple index types and operators
+CREATE INDEX IF NOT EXISTS idx_pages_embedding_cosine
   ON pages USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);  -- Adjust lists parameter based on dataset size
+  WITH (lists = 100);  -- For cosine distance searches
+
+-- Alternative indexes for other distance metrics
+-- CREATE INDEX idx_pages_embedding_l2
+--   ON pages USING ivfflat (embedding vector_l2_ops)
+--   WITH (lists = 100);  -- For L2 distance searches
+
+-- CREATE INDEX idx_pages_embedding_ip
+--   ON pages USING ivfflat (embedding vector_ip_ops)
+--   WITH (lists = 100);  -- For inner product searches
 
 -- Full-text search index
 CREATE INDEX IF NOT EXISTS idx_pages_fts
@@ -97,7 +190,8 @@ CREATE TRIGGER trig_update_content_tsvector
 
 ```javascript
 async function storePageWithEmbedding(db, pageData, embedding) {
-  // Convert Float32Array to PostgreSQL array format
+  // Convert Float32Array from Transformers.js to PostgreSQL array format
+  // embedding is a Float32Array(384) from the BGE model
   const embeddingArray = `[${Array.from(embedding).join(',')}]`;
 
   const result = await db.query(`
@@ -125,26 +219,78 @@ async function storePageWithEmbedding(db, pageData, embedding) {
 
   return result.rows[0].id;
 }
+
+// Example: Generate embedding and store page
+async function ingestPageWithEmbedding(db, pageData, embedder) {
+  // Generate 384-dimensional embedding using Transformers.js
+  const textToEmbed = `${pageData.title} ${pageData.content_text}`;
+  const embedding = await embedder(textToEmbed, {
+    pooling: 'mean',
+    normalize: true
+  });
+
+  // embedding.data is Float32Array(384)
+  const embeddingArray = embedding.data instanceof Float32Array
+    ? embedding.data
+    : new Float32Array(embedding.data);
+
+  return await storePageWithEmbedding(db, pageData, embeddingArray);
+}
 ```
 
 ### Vector Similarity Search
 
+pgvector supports multiple distance operators for different use cases:
+
 ```javascript
-async function vectorSearch(db, queryEmbedding, limit = 25) {
+async function vectorSearch(db, queryEmbedding, limit = 25, distanceType = 'cosine') {
   const embeddingArray = `[${Array.from(queryEmbedding).join(',')}]`;
+
+  // Choose distance operator based on type
+  let distanceOp, similarityCalc;
+  switch (distanceType) {
+    case 'cosine':
+      distanceOp = '<=>';  // Cosine distance (most common for embeddings)
+      similarityCalc = '1 - (embedding <=> $1::vector)';
+      break;
+    case 'l2':
+      distanceOp = '<->';  // L2/Euclidean distance
+      similarityCalc = '1 / (1 + (embedding <-> $1::vector))';
+      break;
+    case 'inner_product':
+      distanceOp = '<#>';  // Inner product (negative for ORDER BY)
+      similarityCalc = '-(embedding <#> $1::vector)';
+      break;
+    case 'l1':
+      distanceOp = '<+>';  // L1/Manhattan distance
+      similarityCalc = '1 / (1 + (embedding <+> $1::vector))';
+      break;
+    default:
+      distanceOp = '<=>';
+      similarityCalc = '1 - (embedding <=> $1::vector)';
+  }
 
   const result = await db.query(`
     SELECT
       id, url, title, domain,
       content_text, last_visit_at, visit_count,
-      1 - (embedding <=> $1::vector) AS similarity
+      ${similarityCalc} AS similarity
     FROM pages
     WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> $1::vector
+    ORDER BY embedding ${distanceOp} $1::vector
     LIMIT $2
   `, [embeddingArray, limit]);
 
   return result.rows;
+}
+
+// Convenience functions for specific distance types
+async function cosineSimilaritySearch(db, queryEmbedding, limit = 25) {
+  return vectorSearch(db, queryEmbedding, limit, 'cosine');
+}
+
+async function euclideanDistanceSearch(db, queryEmbedding, limit = 25) {
+  return vectorSearch(db, queryEmbedding, limit, 'l2');
 }
 ```
 
@@ -300,8 +446,9 @@ async function initializeDatabase() {
     console.log('[DB] Initializing PGlite database with IndexedDB storage');
 
     db = new PGlite({
-      dataDir: 'idb://ai-history-pglite',
+      dataDir: 'idb://ai-history-pglite',  // IndexedDB VFS auto-selected
       extensions: { vector }
+      // Note: Do NOT use fs: 'idb' - causes "fs.init is not a function" errors
     });
 
     await db.waitReady;
@@ -494,6 +641,104 @@ async function testFTS(db) {
   await db.query('DELETE FROM pages WHERE url = $1', ['test://fts']);
 }
 ```
+
+## Common Issues and Solutions
+
+### WebAssembly Compilation Errors
+
+**Issue**: `TypeError: Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response`
+
+**Cause**: PGlite attempts to use OPFS (Origin Private File System) by default, which is incompatible with Chrome extension security contexts.
+
+**Root Cause**: Chrome extensions run in a restricted environment where OPFS access patterns conflict with WebAssembly module loading, causing the WASM compilation to fail when trying to read from an already-consumed Response stream.
+
+**Solution**: Use proper IndexedDB VFS configuration:
+
+```javascript
+// Method 1: dataDir prefix (recommended)
+const pglite = new PGlite({
+  dataDir: 'idb://ai-history-pglite',  // IndexedDB VFS auto-selected
+  extensions: { vector }
+});
+
+// Method 2: Explicit IdbFs import (alternative)
+import { IdbFs } from '@electric-sql/pglite/idbfs';
+const pglite = new PGlite({
+  fs: new IdbFs('ai-history-pglite'),
+  extensions: { vector }
+});
+```
+
+**Why This Works**: Both methods properly configure IndexedDB VFS, avoiding OPFS/WASM conflicts. The incorrect `fs: 'idb'` string option is not supported and causes "fs.init is not a function" errors.
+
+### PostgreSQL Trigger Syntax Issues
+
+**Issue**: `syntax error at or near "NOT" ... CREATE TRIGGER IF NOT EXISTS`
+
+**Cause**: PostgreSQL doesn't support `IF NOT EXISTS` for triggers.
+
+**Solution**: Drop and recreate the trigger:
+
+```javascript
+await db.exec(`
+  DROP TRIGGER IF EXISTS trig_update_content_tsvector ON pages;
+  CREATE TRIGGER trig_update_content_tsvector
+    BEFORE INSERT OR UPDATE ON pages
+    FOR EACH ROW
+    EXECUTE FUNCTION update_content_tsvector();
+`);
+```
+
+### PGlite Filesystem Option Errors
+
+**Issue**: `TypeError: this.fs.init is not a function`
+
+**Cause**: Using explicit `fs: 'idb'` option with PGlite constructor.
+
+**Solution**: Use proper IndexedDB VFS configuration methods:
+
+```javascript
+// ❌ Wrong - causes fs.init errors
+const db = new PGlite({
+  dataDir: 'idb://ai-history-pglite',
+  extensions: { vector },
+  fs: 'idb'  // This string option doesn't exist
+});
+
+// ✅ Correct Method 1 - dataDir prefix
+const db = new PGlite({
+  dataDir: 'idb://ai-history-pglite',  // Automatically uses IndexedDB VFS
+  extensions: { vector }
+});
+
+// ✅ Correct Method 2 - explicit IdbFs
+import { IdbFs } from '@electric-sql/pglite/idbfs';
+const db = new PGlite({
+  fs: new IdbFs('ai-history-pglite'),  // Proper IdbFs instance
+  extensions: { vector }
+});
+```
+
+### Chrome Extension Bundle Files
+
+**Note**: The `chunk-*.js` files in `lib/` are required PGlite dependencies generated during build. Do not remove these files as they contain essential WASM loading and runtime code.
+
+### IndexedDB Storage Verification
+
+Always verify that IndexedDB storage is being used for Chrome extension compatibility:
+
+```javascript
+// This should log success for Chrome extensions
+console.log('[DB] ✅ Using IndexedDB storage - safe for Chrome extension');
+
+// Verify the database is accessible
+const testQuery = await db.query('SELECT 1 as test');
+console.assert(testQuery.rows[0].test === 1, 'Database connectivity failed');
+```
+
+### Extension Reload Requirements
+
+If you encounter "Unknown message type" errors, reload the extension at `chrome://extensions/` to refresh the offscreen document and its dependencies.
 
 ## Resources and References
 

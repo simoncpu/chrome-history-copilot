@@ -26,6 +26,9 @@ let aiSession = null;
 let isProcessingPages = false;
 let queueStatusInterval = null;
 
+// Feature flags
+let shouldDisableInputDuringProcessing = false;  // Default: don't disable inputs during processing
+
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeChatPage);
 
@@ -489,6 +492,9 @@ async function loadChatPrefs() {
       const pref = !!(result.aiPrefs && result.aiPrefs.enableRemoteWarm);
       toggleRemoteWarmChat.checked = pref;
     }
+
+    // Load input disabling preference (default: false - don't disable)
+    shouldDisableInputDuringProcessing = !!(result.aiPrefs?.disableInputDuringProcessing);
   } catch (e) {
     console.debug('[CHAT] Failed to load aiPrefs');
   }
@@ -683,10 +689,14 @@ async function checkQueueStatus() {
 
       if (isProcessingPages) {
         showProcessingStatusChat(stats);
-        disableChatInput();
+        if (shouldDisableInputDuringProcessing) {
+          disableChatInput();
+        }
       } else {
         hideProcessingStatusChat();
-        enableChatInput();
+        if (shouldDisableInputDuringProcessing) {
+          enableChatInput();
+        }
       }
     }
   } catch (error) {

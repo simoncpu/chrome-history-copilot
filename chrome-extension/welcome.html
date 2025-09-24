@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to AI History</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700&display=swap');
+
+    :root {
+      --primary-color: #7dd3fc;
+      --primary-hover: #38bdf8;
+      --accent-color: #a78bfa;
+      --ocean-light: #f0f9ff;
+      --grey-whisper: #f8fafc;
+      --orange-glow: #fff7ed;
+      --text-primary: #334155;
+      --text-secondary: #64748b;
+      --text-muted: #94a3b8;
+      --success: #4ade80;
+      --background: linear-gradient(135deg, var(--ocean-light) 0%, var(--grey-whisper) 50%, var(--orange-glow) 100%);
+      --surface: rgba(255, 255, 255, 0.9);
+      --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
+      --border-radius-soft: 24px;
+      --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 600px;
+      width: 100%;
+      background: var(--surface);
+      border-radius: var(--border-radius-soft);
+      box-shadow: var(--shadow-soft);
+      padding: 40px;
+      text-align: center;
+      backdrop-filter: blur(10px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .container::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+      border-radius: var(--border-radius-soft) var(--border-radius-soft) 0 0;
+    }
+
+    .logo {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 24px;
+      background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .title {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      font-size: 18px;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+      font-weight: 400;
+    }
+
+    .features {
+      text-align: left;
+      margin: 32px 0;
+    }
+
+    .feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: rgba(125, 211, 252, 0.05);
+      border-radius: 16px;
+      border: 1px solid rgba(125, 211, 252, 0.1);
+    }
+
+    .feature-icon {
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .feature-content h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-primary);
+    }
+
+    .feature-content p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .permission-section {
+      background: rgba(253, 215, 170, 0.1);
+      border: 2px solid rgba(251, 191, 36, 0.2);
+      border-radius: 20px;
+      padding: 24px;
+      margin: 32px 0;
+    }
+
+    .permission-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .permission-desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    .permission-list {
+      text-align: left;
+      margin-bottom: 24px;
+    }
+
+    .permission-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .permission-check {
+      width: 16px;
+      height: 16px;
+      background: var(--success);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 16px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: var(--transition-smooth);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      min-width: 140px;
+      justify-content: center;
+    }
+
+    .button-primary {
+      background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
+      color: white;
+      box-shadow: 0 4px 20px rgba(125, 211, 252, 0.3);
+    }
+
+    .button-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(125, 211, 252, 0.4);
+    }
+
+    .button-secondary {
+      background: rgba(148, 163, 184, 0.1);
+      color: var(--text-secondary);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .button-secondary:hover {
+      background: rgba(148, 163, 184, 0.2);
+      transform: translateY(-1px);
+    }
+
+    .status {
+      margin-top: 24px;
+      padding: 16px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      display: none;
+    }
+
+    .status.success {
+      background: rgba(74, 222, 128, 0.1);
+      color: #059669;
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      display: block;
+    }
+
+    .status.error {
+      background: rgba(248, 113, 113, 0.1);
+      color: #dc2626;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      display: block;
+    }
+
+    .next-steps {
+      margin-top: 32px;
+      text-align: left;
+      background: rgba(167, 139, 250, 0.05);
+      border-radius: 16px;
+      padding: 20px;
+      border: 1px solid rgba(167, 139, 250, 0.1);
+      display: none;
+    }
+
+    .next-steps.show {
+      display: block;
+    }
+
+    .next-steps h3 {
+      color: var(--accent-color);
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .next-steps ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .next-steps li {
+      margin-bottom: 8px;
+      padding-left: 20px;
+      position: relative;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .next-steps li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--accent-color);
+      font-weight: bold;
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 24px;
+        margin: 10px;
+      }
+
+      .title {
+        font-size: 28px;
+      }
+
+      .subtitle {
+        font-size: 16px;
+      }
+
+      .buttons {
+        flex-direction: column;
+      }
+
+      .button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🤖</div>
+
+    <h1 class="title">Welcome to AI History</h1>
+    <p class="subtitle">Transform your browsing history into an intelligent, searchable knowledge base</p>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🔍</div>
+        <div class="feature-content">
+          <h3>Smart Search</h3>
+          <p>Find pages using natural language queries, not just keywords</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-icon">🤖</div>
+        <div class="feature-content">
+          <h3>AI Chat</h3>
+          <p>Ask questions about your browsing history and get intelligent answers</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-icon">📝</div>
+        <div class="feature-content">
+          <h3>Auto Summaries</h3>
+          <p>Automatic page summaries using Chrome's built-in AI capabilities</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-content">
+          <h3>Privacy First</h3>
+          <p>Everything stays local on your device - no data sent to external servers</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="permission-section">
+      <div class="permission-title">
+        🛡️ Required Permissions
+      </div>
+      <p class="permission-desc">
+        To provide intelligent search and summaries, AI History needs access to read page content from websites you visit.
+      </p>
+
+      <div class="permission-list">
+        <div class="permission-item">
+          <div class="permission-check">✓</div>
+          <span><strong>Read website content:</strong> Extract text for search and summaries</span>
+        </div>
+        <div class="permission-item">
+          <div class="permission-check">✓</div>
+          <span><strong>Access browsing history:</strong> Track pages for intelligent indexing</span>
+        </div>
+        <div class="permission-item">
+          <div class="permission-check">✓</div>
+          <span><strong>Storage:</strong> Save processed data locally on your device</span>
+        </div>
+      </div>
+
+      <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 20px;">
+        <strong>Note:</strong> All data processing happens locally. No information is sent to external servers.
+      </p>
+
+      <div class="buttons">
+        <button id="grantPermissions" class="button button-primary">
+          ✅ Grant Permissions & Continue
+        </button>
+        <a href="chrome://extensions/" target="_blank" class="button button-secondary">
+          ⚙️ Manual Setup
+        </a>
+      </div>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div id="nextSteps" class="next-steps">
+      <h3>🎉 Setup Complete!</h3>
+      <ul>
+        <li>Click the AI History icon in your toolbar to open the side panel</li>
+        <li>Browse normally - pages will be automatically indexed</li>
+        <li>Use the Search tab to find pages with natural language</li>
+        <li>Try the Chat tab to ask questions about your browsing history</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="welcome.js"></script>
+</body>
+</html>

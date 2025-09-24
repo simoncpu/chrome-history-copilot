@@ -28,6 +28,9 @@ let isLoading = false;
 let hasMoreResults = false;
 let lastBatch = [];
 let isAutoLoading = false;
+
+// Feature flags
+let shouldDisableInputDuringProcessing = false;  // Default: don't disable inputs during processing
 let isProcessingPages = false;
 let queueStatusInterval = null;
 
@@ -679,6 +682,9 @@ async function loadUserPreferences() {
       toggleRemoteWarm.checked = pref;
     }
 
+    // Load input disabling preference (default: false - don't disable)
+    shouldDisableInputDuringProcessing = !!(result.aiPrefs?.disableInputDuringProcessing);
+
     // Return the last search query for auto-execution
     return result.lastSearchQuery || null;
 
@@ -788,10 +794,14 @@ async function checkQueueStatus() {
 
       if (isProcessingPages) {
         showProcessingStatus(stats);
-        disableSearchInput();
+        if (shouldDisableInputDuringProcessing) {
+          disableSearchInput();
+        }
       } else {
         hideProcessingStatus();
-        enableSearchInput();
+        if (shouldDisableInputDuringProcessing) {
+          enableSearchInput();
+        }
       }
 
       // If processing just finished, refresh the search to show updated summaries

@@ -127,6 +127,7 @@ function initializeDOMElements() {
   // Removed allowCloudModel toggle (redundant)
   toggleEnableReranker = document.getElementById('toggleEnableReranker');
   toggleEnableRemoteWarm = document.getElementById('toggleEnableRemoteWarm');
+  toggleDisableInputDuringProcessing = document.getElementById('toggleDisableInputDuringProcessing');
   modelStatusDebug = document.getElementById('modelStatusDebug');
   refreshModelStatusBtn = document.getElementById('refreshModelStatus');
   savePrefs = document.getElementById('savePrefs');
@@ -241,9 +242,10 @@ function handleOpenExtensionSettings() {
 async function loadPreferences() {
   try {
     const store = await chrome.storage.local.get(['aiPrefs']);
-    const prefs = store.aiPrefs || { enableReranker: false, enableRemoteWarm: false };
+    const prefs = store.aiPrefs || { enableReranker: false, enableRemoteWarm: false, disableInputDuringProcessing: false };
     if (toggleEnableReranker) toggleEnableReranker.checked = !!prefs.enableReranker;
     if (toggleEnableRemoteWarm) toggleEnableRemoteWarm.checked = !!prefs.enableRemoteWarm;
+    if (toggleDisableInputDuringProcessing) toggleDisableInputDuringProcessing.checked = !!prefs.disableInputDuringProcessing;
     // Also refresh model status
     updateModelStatusDebug();
   } catch (e) {
@@ -254,7 +256,8 @@ async function loadPreferences() {
 async function handleSavePrefs() {
   const prefs = {
     enableReranker: toggleEnableReranker ? toggleEnableReranker.checked : false,
-    enableRemoteWarm: toggleEnableRemoteWarm ? toggleEnableRemoteWarm.checked : false
+    enableRemoteWarm: toggleEnableRemoteWarm ? toggleEnableRemoteWarm.checked : false,
+    disableInputDuringProcessing: toggleDisableInputDuringProcessing ? toggleDisableInputDuringProcessing.checked : false
   };
   try {
     await chrome.storage.local.set({ aiPrefs: prefs });

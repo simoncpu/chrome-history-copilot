@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI History Search</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <div class="container">
     <!-- Permissions Overlay (hidden by default) -->
@@ -25,13 +27,64 @@
     <!-- Browser-style Tabs -->
     <div class="browser-tabs" role="tablist" aria-label="Navigation">
       <div class="tab-bar">
-        <div class="tab active" data-page="search" role="tab" aria-selected="true" aria-controls="search-panel">
-          <span class="tab-icon" aria-hidden="true">🔍</span>
-          <span class="tab-title">Search</span>
+        <div class="tabs-group">
+          <div class="tab active" data-page="search" role="tab" aria-selected="true" aria-controls="search-panel">
+            <span class="tab-icon" aria-hidden="true">🔍</span>
+            <span class="tab-title">Search</span>
+          </div>
+          <div class="tab" data-page="chat" role="tab" aria-selected="false" aria-controls="chat-panel">
+            <span class="tab-icon" aria-hidden="true">💬</span>
+            <span class="tab-title">Chat</span>
+          </div>
         </div>
-        <div class="tab" data-page="chat" role="tab" aria-selected="false" aria-controls="chat-panel">
-          <span class="tab-icon" aria-hidden="true">💬</span>
-          <span class="tab-title">Chat</span>
+        <button id="advancedToggle" class="tab-settings-btn" title="Advanced Settings">
+          <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <line x1="4" y1="21" x2="4" y2="14"></line>
+            <line x1="4" y1="10" x2="4" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12" y2="3"></line>
+            <line x1="20" y1="21" x2="20" y2="16"></line>
+            <line x1="20" y1="12" x2="20" y2="3"></line>
+            <line x1="1" y1="14" x2="7" y2="14"></line>
+            <line x1="9" y1="8" x2="15" y2="8"></line>
+            <line x1="17" y1="16" x2="23" y2="16"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Settings Dropdown Panel -->
+      <div id="advancedPanel" class="settings-dropdown hidden">
+        <div class="settings-dropdown-content">
+          <div class="mode-selector">
+            <div class="mode-label">Search Mode:</div>
+            <div class="radio-group">
+              <label class="radio-option">
+                <input type="radio" name="searchMode" value="hybrid-rerank" checked>
+                <span class="radio-custom"></span>
+                <span class="radio-text">🚀 Hybrid + Rerank</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="searchMode" value="hybrid-rrf">
+                <span class="radio-custom"></span>
+                <span class="radio-text">⚡ Hybrid (RRF)</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="searchMode" value="text">
+                <span class="radio-custom"></span>
+                <span class="radio-text">📝 Text Only</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="searchMode" value="vector">
+                <span class="radio-custom"></span>
+                <span class="radio-text">🧠 Vector Only</span>
+              </label>
+            </div>
+          </div>
+          <div class="option-row">
+            <input type="checkbox" id="toggleRemoteWarm" />
+            <label for="toggleRemoteWarm">Use larger remote model</label>
+          </div>
+          <div id="modelStatus" class="model-status"></div>
         </div>
       </div>
     </div>
@@ -42,13 +95,8 @@
         <!-- Search Input -->
         <div class="search-section">
           <div class="search-container">
-            <input
-              type="text"
-              id="searchInput"
-              class="search-input"
-              placeholder="Search your browsing history..."
-              autocomplete="off"
-            >
+            <input type="text" id="searchInput" class="search-input" placeholder="Search your browsing history..."
+              autocomplete="off">
             <button id="searchButton" class="search-button">
               <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <circle cx="11" cy="11" r="8"></circle>
@@ -57,33 +105,6 @@
             </button>
           </div>
 
-          <!-- Advanced Options Toggle -->
-          <div style="display: flex; justify-content: center; margin-top: 4px;">
-            <button id="advancedToggle" class="advanced-toggle">
-              Advanced Options
-              <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <polyline points="6,9 12,15 18,9"></polyline>
-              </svg>
-            </button>
-          </div>
-
-          <!-- Advanced Options Panel -->
-          <div id="advancedPanel" class="advanced-panel hidden">
-            <div class="mode-selector">
-              <label class="mode-label">Search Mode:</label>
-              <select id="searchMode" class="mode-select">
-                <option value="hybrid-rerank">Hybrid + Rerank (Default)</option>
-                <option value="hybrid-rrf">Hybrid (RRF)</option>
-                <option value="text">Text Only</option>
-                <option value="vector">Vector Only</option>
-              </select>
-            </div>
-            <div class="option-row" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="toggleRemoteWarm" />
-              <label for="toggleRemoteWarm">Use larger remote model (warm in background)</label>
-            </div>
-            <div id="modelStatus" class="small-muted" style="margin-top: 6px; color: #6b7280;"></div>
-          </div>
         </div>
 
         <!-- Results Section -->
@@ -97,6 +118,11 @@
                   <div class="skeleton-title"></div>
                   <div class="skeleton-url"></div>
                   <div class="skeleton-snippet"></div>
+                  <div class="skeleton-metadata">
+                    <div class="skeleton-badge"></div>
+                    <div class="skeleton-pill"></div>
+                    <div class="skeleton-pill"></div>
+                  </div>
                 </div>
               </div>
               <div class="skeleton-item">
@@ -105,6 +131,11 @@
                   <div class="skeleton-title"></div>
                   <div class="skeleton-url"></div>
                   <div class="skeleton-snippet"></div>
+                  <div class="skeleton-metadata">
+                    <div class="skeleton-badge"></div>
+                    <div class="skeleton-pill"></div>
+                    <div class="skeleton-pill"></div>
+                  </div>
                 </div>
               </div>
               <div class="skeleton-item">
@@ -113,6 +144,23 @@
                   <div class="skeleton-title"></div>
                   <div class="skeleton-url"></div>
                   <div class="skeleton-snippet"></div>
+                  <div class="skeleton-metadata">
+                    <div class="skeleton-badge"></div>
+                    <div class="skeleton-pill"></div>
+                    <div class="skeleton-pill"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="skeleton-item">
+                <div class="skeleton-favicon"></div>
+                <div class="skeleton-content">
+                  <div class="skeleton-title"></div>
+                  <div class="skeleton-url"></div>
+                  <div class="skeleton-snippet"></div>
+                  <div class="skeleton-metadata">
+                    <div class="skeleton-badge"></div>
+                    <div class="skeleton-pill"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -149,4 +197,5 @@
 
   <script type="module" src="history_search.js"></script>
 </body>
+
 </html>

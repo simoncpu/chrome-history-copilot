@@ -132,19 +132,24 @@ function setupEventListeners() {
     clearChatButton.addEventListener('click', handleClearChat);
   }
 
-  // Advanced toggle
+  // Advanced settings dropdown
   if (advancedToggleChat) {
-    advancedToggleChat.addEventListener('click', () => {
-      const isHidden = advancedPanelChat.classList.contains('hidden');
-      if (isHidden) {
-        advancedPanelChat.classList.remove('hidden');
-        advancedToggleChat.classList.add('expanded');
-      } else {
-        advancedPanelChat.classList.add('hidden');
-        advancedToggleChat.classList.remove('expanded');
-      }
-    });
+    advancedToggleChat.addEventListener('click', toggleChatSettingsDropdown);
   }
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!advancedToggleChat.contains(e.target) && !advancedPanelChat.contains(e.target)) {
+      closeChatSettingsDropdown();
+    }
+  });
+
+  // Close settings with Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !advancedPanelChat.classList.contains('hidden')) {
+      closeChatSettingsDropdown();
+    }
+  });
 
   // Remote warm toggle
   if (toggleRemoteWarmChat) {
@@ -627,6 +632,27 @@ function getFaviconUrl(url, domain) {
   } catch (_) {
     return 'https://www.google.com/s2/favicons?sz=16&domain=example.com';
   }
+}
+
+// Settings dropdown functions
+function toggleChatSettingsDropdown() {
+  const isHidden = advancedPanelChat.classList.contains('hidden');
+
+  if (isHidden) {
+    openChatSettingsDropdown();
+  } else {
+    closeChatSettingsDropdown();
+  }
+}
+
+function openChatSettingsDropdown() {
+  advancedPanelChat.classList.remove('hidden');
+  advancedToggleChat.classList.add('active');
+}
+
+function closeChatSettingsDropdown() {
+  advancedPanelChat.classList.add('hidden');
+  advancedToggleChat.classList.remove('active');
 }
 
 // Export for debugging

@@ -37,7 +37,8 @@ function initializeSearchPage() {
   searchButton = document.getElementById('searchButton');
   advancedToggle = document.getElementById('advancedToggle');
   advancedPanel = document.getElementById('advancedPanel');
-  searchMode = document.getElementById('searchMode');
+  // searchMode now handled via radio buttons
+  searchMode = null; // Will be handled by helper functions
   loadingState = document.getElementById('loadingState');
   emptyState = document.getElementById('emptyState');
   errorState = document.getElementById('errorState');
@@ -145,7 +146,21 @@ function setupEventListeners() {
   searchButton.addEventListener('click', handleSearchSubmit);
 
   // Advanced options toggle
-  advancedToggle.addEventListener('click', toggleAdvancedPanel);
+  advancedToggle.addEventListener('click', toggleSettingsDropdown);
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!advancedToggle.contains(e.target) && !advancedPanel.contains(e.target)) {
+      closeSettingsDropdown();
+    }
+  });
+
+  // Close settings with Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !advancedPanel.classList.contains('hidden')) {
+      closeSettingsDropdown();
+    }
+  });
 
   // Remote warm toggle
   if (toggleRemoteWarm) {
@@ -169,8 +184,11 @@ function setupEventListeners() {
     });
   }
 
-  // Search mode change
-  searchMode.addEventListener('change', handleSearchModeChange);
+  // Search mode radio buttons
+  const radioButtons = document.querySelectorAll('input[name="searchMode"]');
+  radioButtons.forEach(radio => {
+    radio.addEventListener('change', handleSearchModeChange);
+  });
 
   // Load more button
   loadMoreButton.addEventListener('click', handleLoadMore);
@@ -241,16 +259,24 @@ function handleSearchSubmit() {
   }
 }
 
-function toggleAdvancedPanel() {
+function toggleSettingsDropdown() {
   const isHidden = advancedPanel.classList.contains('hidden');
 
   if (isHidden) {
-    advancedPanel.classList.remove('hidden');
-    advancedToggle.classList.add('expanded');
+    openSettingsDropdown();
   } else {
-    advancedPanel.classList.add('hidden');
-    advancedToggle.classList.remove('expanded');
+    closeSettingsDropdown();
   }
+}
+
+function openSettingsDropdown() {
+  advancedPanel.classList.remove('hidden');
+  advancedToggle.classList.add('active');
+}
+
+function closeSettingsDropdown() {
+  advancedPanel.classList.add('hidden');
+  advancedToggle.classList.remove('active');
 }
 
 function handleSearchModeChange() {
@@ -312,7 +338,7 @@ async function performSearch(query, offset = 0, isAutoLoad = false) {
       type: 'search',
       data: {
         query: query,
-        mode: searchMode.value,
+        mode: getSelectedSearchMode(),
         limit: 25,
         offset: offset
       }
@@ -471,7 +497,7 @@ function createResultElement(result) {
     favicon.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
   };
 
-  // Header with title and badges
+  // Header with just title
   const header = document.createElement('div');
   header.className = 'result-header';
 
@@ -480,16 +506,7 @@ function createResultElement(result) {
   title.className = 'result-title';
   title.textContent = result.title || 'Untitled';
 
-  // Badges container
-  const badges = document.createElement('div');
-  badges.className = 'result-badges';
-
-  // Search mode badge
-  const modeBadge = createSearchModeBadge(searchMode?.value || 'hybrid-rerank');
-  badges.appendChild(modeBadge);
-
   header.appendChild(title);
-  header.appendChild(badges);
 
   // Add favicon and header to header row
   headerRow.appendChild(favicon);
@@ -512,6 +529,10 @@ function createResultElement(result) {
   // Metadata container
   const metadata = document.createElement('div');
   metadata.className = 'result-metadata';
+
+  // Search mode badge (moved from header)
+  const modeBadge = createSearchModeBadge(getSelectedSearchMode());
+  metadata.appendChild(modeBadge);
 
   // Visit count pill (if available)
   if (result.visit_count && result.visit_count > 1) {
@@ -577,23 +598,23 @@ function createSearchModeBadge(mode) {
 
   switch (mode) {
     case 'hybrid-rerank':
-      badgeText = '🚀';
+      badgeText = '🚀 Hybrid+';
       badgeClass = 'search-mode-rerank';
       break;
     case 'hybrid-rrf':
-      badgeText = '⚡';
+      badgeText = '⚡ Hybrid (RRF)';
       badgeClass = 'search-mode-hybrid';
       break;
     case 'text':
-      badgeText = '📝';
+      badgeText = '📝 Text';
       badgeClass = 'search-mode-text';
       break;
     case 'vector':
-      badgeText = '🧠';
+      badgeText = '🧠 Vector';
       badgeClass = 'search-mode-vector';
       break;
     default:
-      badgeText = '🔍';
+      badgeText = '🔍 Default';
       badgeClass = 'search-mode-hybrid';
   }
 
@@ -641,7 +662,7 @@ async function loadUserPreferences() {
     const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs', 'lastSearchQuery']);
 
     if (result.searchMode) {
-      searchMode.value = result.searchMode;
+      setSelectedSearchMode(result.searchMode);
     }
 
     if (toggleRemoteWarm) {
@@ -661,7 +682,7 @@ async function loadUserPreferences() {
 async function saveUserPreferences() {
   try {
     await chrome.storage.local.set({
-      searchMode: searchMode.value,
+      searchMode: getSelectedSearchMode(),
       lastSidePanelPage: 'search'
     });
   } catch (error) {
@@ -722,6 +743,19 @@ function startModelWarmWatcher(timeoutMs = 120000) {
       modelWarmWatcher = null;
     }
   }, 2000);
+}
+
+// Helper functions for radio button search mode
+function getSelectedSearchMode() {
+  const checked = document.querySelector('input[name="searchMode"]:checked');
+  return checked ? checked.value : 'hybrid-rerank';
+}
+
+function setSelectedSearchMode(mode) {
+  const radio = document.querySelector(`input[name="searchMode"][value="${mode}"]`);
+  if (radio) {
+    radio.checked = true;
+  }
 }
 
 // Export for debugging

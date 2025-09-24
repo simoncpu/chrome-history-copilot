@@ -25,13 +25,39 @@
     <!-- Browser-style Tabs -->
     <div class="browser-tabs" role="tablist" aria-label="Navigation">
       <div class="tab-bar">
-        <div class="tab" data-page="search" role="tab" aria-selected="false" aria-controls="search-panel">
-          <span class="tab-icon" aria-hidden="true">🔍</span>
-          <span class="tab-title">Search</span>
+        <div class="tabs-group">
+          <div class="tab" data-page="search" role="tab" aria-selected="false" aria-controls="search-panel">
+            <span class="tab-icon" aria-hidden="true">🔍</span>
+            <span class="tab-title">Search</span>
+          </div>
+          <div class="tab active" data-page="chat" role="tab" aria-selected="true" aria-controls="chat-panel">
+            <span class="tab-icon" aria-hidden="true">💬</span>
+            <span class="tab-title">Chat</span>
+          </div>
         </div>
-        <div class="tab active" data-page="chat" role="tab" aria-selected="true" aria-controls="chat-panel">
-          <span class="tab-icon" aria-hidden="true">💬</span>
-          <span class="tab-title">Chat</span>
+        <button id="advancedToggleChat" class="tab-settings-btn" title="Advanced Settings">
+          <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <line x1="4" y1="21" x2="4" y2="14"></line>
+            <line x1="4" y1="10" x2="4" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12" y2="3"></line>
+            <line x1="20" y1="21" x2="20" y2="16"></line>
+            <line x1="20" y1="12" x2="20" y2="3"></line>
+            <line x1="1" y1="14" x2="7" y2="14"></line>
+            <line x1="9" y1="8" x2="15" y2="8"></line>
+            <line x1="17" y1="16" x2="23" y2="16"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Settings Dropdown Panel -->
+      <div id="advancedPanelChat" class="settings-dropdown hidden">
+        <div class="settings-dropdown-content">
+          <div class="option-row">
+            <input type="checkbox" id="toggleRemoteWarmChat" />
+            <label for="toggleRemoteWarmChat">Use larger remote model (warm in background)</label>
+          </div>
+          <div id="modelStatusChat" class="model-status"></div>
         </div>
       </div>
     </div>
@@ -75,24 +101,6 @@
 
       <!-- Chat Input -->
       <div class="chat-input-section">
-        <!-- Advanced Options Toggle -->
-        <div style="display: flex; justify-content: center; margin-bottom: 8px;">
-          <button id="advancedToggleChat" class="advanced-toggle">
-            Advanced Options
-            <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <polyline points="6,9 12,15 18,9"></polyline>
-            </svg>
-          </button>
-        </div>
-
-        <!-- Advanced Options Panel -->
-        <div id="advancedPanelChat" class="advanced-panel hidden">
-          <div class="option-row" style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="toggleRemoteWarmChat" />
-            <label for="toggleRemoteWarmChat">Use larger remote model (warm in background)</label>
-          </div>
-          <div id="modelStatusChat" class="small-muted" style="margin-top:6px;color:#6b7280;"></div>
-        </div>
 
         <form id="chatForm" class="chat-form">
           <div class="chat-input-container">

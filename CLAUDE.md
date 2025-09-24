@@ -7,27 +7,28 @@ Audience: Engineers building the Chrome extension described here and agents edit
 ## Objectives
 
 - Ship a Chrome MV3 extension that provides “LLM‑powered browser history” using Chrome’s on‑device AI APIs in Chrome Canary.
-- Store and search history locally using SQLite WASM with sqlite-vec + FTS5.
-- Default query mode: Hybrid retrieval with reranking (two‑stage) as described in technical_challenges_sqlite.md.
-- Offer advanced modes: Hybrid (RRF), Text‑only (BM25/FTS5), Vector‑only.
+- Store and search history locally using PGlite with pgvector for vector similarity search and PostgreSQL full-text search.
+- Default query mode: Hybrid retrieval with reranking (two‑stage) as described in technical_challenges_pglite.md.
+- Offer advanced modes: Hybrid (RRF), Text‑only (PostgreSQL full-text search), Vector‑only.
 - UI delivered via Chrome Side Panel with two pages the user can switch between:
   1) `history_search.html` (default)
   2) `history_chat.html` (Prompt API‑powered chat)
 - Provide a dev/debug page `debug.html` (DB explorer + Clear DB), also reachable from the extension’s context menu.
 
-See also: technical_challenges_sqlite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, constitution.md.
+See also: technical_challenges_pglite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, constitution.md.
 
 ## Tech Stack
-- sqlite-vec-wasm-demo, which can be found as an NPM package
+- PGlite (lightweight PostgreSQL in WASM)
+- pgvector extension for vector similarity search
 - Transformers.js
 - Chrome AI APIs, which are available in Chrome Canary
 
 ## High‑Level Architecture
 
 - Background (service worker): lifecycle, side panel setup, context menu, offscreen document orchestration.
-- Offscreen document: runs heavy/long‑lived tasks (SQLite + sqlite-vec, FTS5, Transformers.js embeddings, optional reranker) and exposes a request/response bridge.
+- Offscreen document: runs heavy/long‑lived tasks (PGlite + pgvector, PostgreSQL full-text search, Transformers.js embeddings, optional reranker) and exposes a request/response bridge.
 - UI (side panel): two HTML pages, separate JS controllers sharing a thin client to the offscreen services.
-- Storage: SQLite DB in OPFS (preferred) or IndexedDB‑backed VFS as fallback. Preferences in `chrome.storage.local`.
+- Storage: PGlite database stored in IndexedDB. Preferences in `chrome.storage.local`.
 - Chrome AI: `window.ai.languageModel` (Prompt), `window.ai.summarizer` (optional per‑page summary generation).
 
 
@@ -42,10 +43,10 @@ See also: technical_challenges_sqlite.md, technical_challenges_transformer.md, t
 - `permissions`: `history`, `sidePanel`, `storage`, `scripting`, `tabs`, `activeTab`, `contextMenus`, `offscreen`
 - `host_permissions`: `https://*/*`, `http://*/*` (needed to extract page content + favicons)
 - `web_accessible_resources`:
-  - SQLite WASM files: `lib/sqlite3.wasm`, `lib/sqlite3.mjs`
+  - PGlite files: `lib/pglite.js` (and any required WASM/worker files)
   - ONNX/Transformers.js assets: `lib/transformers.min.js`, `lib/ort-wasm.wasm`, `lib/ort-wasm-simd-threaded.wasm`
   - Suggested manifest snippet:
-    - `"web_accessible_resources": [{ "resources": ["lib/*.wasm", "lib/transformers.min.js", "lib/sqlite3.mjs"], "matches": ["<all_urls>"] }]`
+    - `"web_accessible_resources": [{ "resources": ["lib/*.wasm", "lib/transformers.min.js", "lib/pglite.js"], "matches": ["<all_urls>"] }]`
 - `content_security_policy.extension_pages` should allow model fetch hosts (if any) used by Transformers.js (e.g., huggingface.co) only as needed. Keep CSP minimal and explicit. Example:
   - `"content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://hf.co https://*.hf.co https://cdn.jsdelivr.net;" }`
 
@@ -69,8 +70,8 @@ See also: technical_challenges_sqlite.md, technical_challenges_transformer.md, t
   - debug.html
   - debug.js
   - lib/
-    - sqlite3.mjs, sqlite3.wasm (sqlite-vec included)
-    - sqlite3-opfs-async-proxy.js (if used)
+    - pglite.js (with pgvector extension included)
+    - Any PGlite worker/WASM files as needed
     - transformers.min.js and ONNX runtime artifacts: ort-wasm.wasm, ort-wasm-simd-threaded.wasm
 
 Bundled libraries are present under `chrome-extension/lib/` in this repo.
@@ -82,7 +83,7 @@ Bundled libraries are present under `chrome-extension/lib/` in this repo.
     - ai-bridge.js (Prompt + Summarizer utilities)
 
 Re‑use and adapt working patterns/code as documented in:
-- technical_challenges_sqlite.md (embedding, vector search, FTS5, hybrid + rerank, RRF)
+- technical_challenges_pglite.md (embedding, vector search with pgvector, PostgreSQL full-text search, hybrid + rerank, RRF)
 - technical_challenges_transformer.md (Transformers.js configuration and constraints)
 - technical_challenges_chrome_api.md (Chrome AI Prompt/Summarizer usage)
 - constitution.md (conventions and packaging)
@@ -103,18 +104,19 @@ Primary tables (one row per logical history document):
   - `last_visit_at` INTEGER (ms)
   - `visit_count` INTEGER
 
-FTS5 virtual table (keyword search):
-- `pages_fts` (contentless or with content): columns mirror `title`, `content_text` (and optionally `url` for debugging). If contentless, use external content rowid = `pages.id`.
+Full-text search (using PostgreSQL):
+- Use PostgreSQL's built-in full-text search capabilities with tsvector/tsquery
+- Create GIN indexes on tsvector columns for efficient text search
 
-Vector table (sqlite-vec):
-- `page_embeddings`:
-  - `id` INTEGER PRIMARY KEY REFERENCES pages(id)
-  - `embedding` VECTOR(D)  // D = embedding dimension (default 384)
-  - `updated_at` INTEGER (ms)
+Vector column (pgvector):
+- Add `embedding` column to `pages` table:
+  - `embedding` vector(384)  // 384-dimensional vector
+  - Create index using: `CREATE INDEX ON pages USING ivfflat (embedding vector_cosine_ops)`
 
 Notes
 - If pages are large, we may chunk content into subdocuments (e.g., `page_chunks` + `page_chunks_fts` + `chunk_embeddings`). Start with whole‑page embedding; add chunking later if recall is insufficient.
-- Maintain simple triggers or code‑level sync to keep `pages_fts` aligned with `pages` inserts/updates. If triggers on virtual tables are blocked, do code‑level maintenance (see technical_challenges_sqlite.md).
+- Use PostgreSQL triggers to automatically update tsvector columns when pages are inserted/updated.
+- Maintain vector embeddings through application code when content changes.
 
 
 ## Ingestion Pipeline
@@ -122,8 +124,8 @@ Notes
 - Listen to `chrome.history.onVisited` + `chrome.tabs.onUpdated({ status: 'complete' })` to detect likely ingestion points.
 - Use `chrome.scripting.executeScript` to extract main text from the active tab (Readability‑style or DOM heuristics). Avoid capturing sensitive inputs; never read inside password fields; honor extension permissions.
 - Persist/merge into `pages` (upsert by URL). Update `visit_count`, `last_visit_at`.
-- Generate embedding with Transformers.js (see below) and store in `page_embeddings`.
-- Index keyword text in `pages_fts`.
+- Generate embedding with Transformers.js (see below) and store in the `embedding` column.
+- Update tsvector column for full-text search indexing.
 - Optionally compute a short `summary` via `window.ai.summarizer` when idle or on demand.
 
 Performance/UX
@@ -148,7 +150,7 @@ Performance/UX
 ## Retrieval: Default Hybrid + Reranking (Two‑Stage)
 
 Stage 1 — Candidate Generation (Hybrid):
-- Run BM25/FTS5 query against `pages_fts` and a vector search against `page_embeddings` using cosine similarity.
+- Run PostgreSQL full-text search using tsquery and vector similarity search using pgvector's cosine distance operators.
 - Take top K1 (FTS5) and top K2 (vector). Merge via RRF or weighted union to produce ~K candidates (e.g., 150–200).
   - RRF score per list with `k = 60` (tunable), `rrf = 1/(k + rank)`.
 
@@ -161,11 +163,11 @@ Stage 2 — Reranking:
 
 Advanced Modes (user‑selectable in UI’s Advanced panel):
 - Hybrid (RRF) only (no stage‑2 reranker)
-- Text only (BM25 via FTS5)
-- Vector only (cosine via sqlite-vec)
+- Text only (PostgreSQL full-text search with ts_rank)
+- Vector only (cosine similarity via pgvector)
 
 Normalization & Scoring
-- Normalize BM25 and cosine to [0, 1] (e.g., z‑score or min‑max per candidate set) before weighted sum.
+- Normalize ts_rank scores and cosine similarities to [0, 1] (e.g., z‑score or min‑max per candidate set) before weighted sum.
 - Suggested defaults: `w_vec=0.5, w_bm25=0.3, w_recency=0.1, w_visits=0.1` (tune as needed).
 
 
@@ -222,8 +224,8 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
   - Provide a message router between UI and offscreen for DB/AI requests (request/response with IDs).
 
 - `offscreen.html`/`offscreen.js` responsibilities:
-  - Initialize SQLite (with OPFS VFS) and ensure schema.
-  - Load sqlite-vec within the WASM build (preferred: statically compiled as documented in technical_challenges_sqlite.md).
+  - Initialize PGlite with pgvector extension and ensure schema.
+  - Configure pgvector for vector similarity search as documented in technical_challenges_pglite.md.
   - Initialize Transformers.js (workers disabled per CSP constraints per prior prototype notes).
   - Expose handlers: `ingestPage`, `search(query, mode, limit)`, `embed(text)`, `summarize(text)`, `clearDb()`, etc.
 
@@ -234,7 +236,7 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
   - `searchMode` = 'hybrid-rerank' | 'hybrid-rrf' | 'text' | 'vector'
   - `lastSidePanelPage` = 'search' | 'chat'
   - `aiPrefs` = { enableReranker: boolean, allowCloudModel: boolean }
-- DB file: `opfs:/ai-history.db` (name flexible; document the actual path in debug).
+- DB storage: PGlite database in IndexedDB (key: `ai-history-pglite`).
 - Model caches: Transformers.js default; provide clear action in debug.
 
 
@@ -248,8 +250,8 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 ## Error Handling and Fallbacks
 
-- If FTS5 unavailable, fallback to simple LIKE or client‑side keyword filtering.
-- If sqlite-vec unavailable, run text‑only and surface a warning in debug.
+- If PostgreSQL full-text search fails, fallback to simple ILIKE or client-side keyword filtering.
+- If pgvector unavailable, run text‑only and surface a warning in debug.
 - If Transformers.js fails to load embeddings model, keep text‑only modes and allow retry from debug.
 - If reranker model heavy, gate behind `aiPrefs.enableReranker`. Default to base hybrid rerank without cross‑encoder.
 - If Prompt API session creation fails, use structured response fallback (top results list with links).
@@ -267,27 +269,27 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 ## Reuse From Local Docs
 
-- technical_challenges_sqlite.md: SQLite + sqlite-vec setup, OPFS configuration, API surface, RRF, and hybrid + rerank details
+- technical_challenges_pglite.md: PGlite + pgvector setup, IndexedDB configuration, API surface, RRF, and hybrid + rerank details
 - technical_challenges_transformer.md: Transformers.js configuration (workers disabled) and embedding/reranking pipeline
 - technical_challenges_chrome_api.md: Chrome AI Prompt API wiring and chat interaction patterns
 
 Ignore
-- Any sidecar processes and mock embedding implementations. Always use sqlite-vec and Transformers.js here.
+- Any sidecar processes and mock embedding implementations. Always use pgvector and Transformers.js here.
 
 
 ## Example Pseudocode (Search)
 
 ```js
 async function hybridSearch(query, { mode = 'hybrid-rerank', limit = 25 } = {}) {
-  const bm25Top = await db.ftsSearch(query, { k: 100 });
+  const textTop = await db.fullTextSearch(query, { k: 100 });  // PostgreSQL FTS
   const queryVec = await embed(query);
-  const vecTop = await db.vecSearch(queryVec, { k: 100 });
+  const vecTop = await db.vectorSearch(queryVec, { k: 100 });  // pgvector search
 
   let candidates;
   if (mode === 'hybrid-rrf') {
-    candidates = rrfMerge(bm25Top, vecTop, { k: 60 });
+    candidates = rrfMerge(textTop, vecTop, { k: 60 });
   } else if (mode === 'text') {
-    candidates = bm25Top;
+    candidates = textTop;
   } else if (mode === 'vector') {
     candidates = vecTop;
   } else { // 'hybrid-rerank'
@@ -358,3 +360,4 @@ async function answerQuery(query) {
 - When in doubt, prefer local‑first, offline‑first behavior.
 - update @chrome-extension/debug.html to show sql queries or things that the chrome extension actually uses
 - Ignore folders that are named prototype_*/ unless explicitly referenced.
+- Some code might still contain assumption that was left when we still used sqlite-wasm and sqlite-vec. Do not use that assumption. New assumption is that we're now using pglite with pgvector.

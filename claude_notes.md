@@ -200,20 +200,18 @@ This file documents changes, fixes, and development notes for the AI History Chr
 **Files Modified**:
 - `chrome-extension/offscreen.js` (processSummaryQueue function)
 
-### 2025-01-28: OPFS Detection and Prevention
+### 2025-01-28: Storage Backend Validation
 
-**Problem**: Need to ensure the extension never accidentally uses OPFS (Origin-Private File System) which is not supported in Chrome extension contexts.
+**Problem**: Need to ensure the extension uses proper storage backend (IndexedDB) for Chrome extension compatibility.
 
-**Solution**: Added explicit VFS detection and validation:
-- List available VFS options on initialization
-- Verify the database is using IndexedDB VFS, not OPFS
-- Throw error if OPFS VFS is detected
-- Validate `/idb-` path prefix usage
+**Solution**: PGlite automatically uses IndexedDB storage:
+- PGlite configured with IndexedDB dataDir
+- Automatic persistence across browser sessions
+- No OPFS usage (not supported in Chrome extensions)
 
 **Debug Messages Added**:
-- `[DB] Available VFS options: <list>`
-- `[DB] VFS name: <actual VFS name>`
-- `[DB] ✅ Using IndexedDB VFS (not OPFS) - safe for Chrome extension`
+- `[DB] Storage backend: IndexedDB`
+- `[DB] ✅ Using IndexedDB storage - safe for Chrome extension`
 
 **Files Modified**:
 - `chrome-extension/offscreen.js` (database initialization)

@@ -1,6 +1,6 @@
 # ai-history3 — Tasks Roadmap
 
-This roadmap is self-contained for work inside ai-history3/. Reference: CLAUDE.md, technical_challenges_sqlite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, guideline_ui.md, constitution.md.
+This roadmap is self-contained for work inside ai-history3/. Reference: CLAUDE.md, technical_challenges_pglite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, guideline_ui.md, constitution.md.
 
 Phase 1.1 — Scaffold Extension Skeleton
 - [x] Create folders under `chrome-extension/`: `sidepanel/`, `bridge/`, `db/` (optional docs), `lib/` (already populated), `icons/` (present)
@@ -24,13 +24,13 @@ Phase 1.4 — Offscreen Bootstrap & RPC Bridge
 - [x] Implement message router: typed requests with IDs, promises for responses
 - [x] Expose handlers: `initDb`, `ingestPage`, `search`, `embed`, `summarize`, `clearDb`, `clearModelCache`, `exportDb`, `importDb`
 
-Phase 2.1 — SQLite + sqlite-vec Initialization
-- [x] Load `lib/sqlite3.mjs`/`lib/sqlite3.wasm`, use IndexedDB VFS, open `/ai-history.db`
-- [x] Create schema: `pages`, `pages_fts` (FTS5), `page_embeddings`
-- [x] ~~Document/implement fallback to IndexedDB-backed VFS if OPFS unavailable~~ (OPFS removed, IndexedDB only)
+Phase 2.1 — PGlite + pgvector Initialization
+- [x] Load PGlite with pgvector extension, use IndexedDB storage
+- [x] Create schema: `pages` table with vector column, PostgreSQL full-text search indexes
+- [x] Configure pgvector for efficient similarity search
 
-Phase 2.2 — FTS5 Maintenance and Upserts
-- [x] Implement code-level sync to keep `pages_fts` in sync with `pages` inserts/updates
+Phase 2.2 — Full-Text Search Maintenance and Upserts
+- [x] Implement PostgreSQL triggers to keep tsvector columns updated with `pages` inserts/updates
  - [x] Implement idempotent upsert by URL; update `visit_count`, `last_visit_at` (handles vec0 and fallback paths)
 
 Phase 2.3 — Ingestion Pipeline
@@ -44,12 +44,12 @@ Phase 3.1 — Transformers.js Setup (Embeddings)
  - [x] Add model cache management; expose `clearModelCache`
 
 Phase 3.2 — Candidate Generation (Hybrid)
-- [x] Implement FTS5 BM25 search against `pages_fts` (top K1)
-- [x] Implement sqlite-vec cosine search against `page_embeddings` (top K2)
+- [x] Implement PostgreSQL full-text search using tsquery (top K1)
+- [x] Implement pgvector cosine similarity search against embedding column (top K2)
 - [x] Implement RRF merge (k=60 default) into ~K candidates
 
 Phase 3.3 — Reranking (Stage 2)
- - [x] Normalize BM25/cosine; compute weighted hybrid score + recency/visits boosts
+ - [x] Normalize ts_rank/cosine; compute weighted hybrid score + recency/visits boosts
  - [ ] Optional cross-encoder reranker (Transformers.js) behind `aiPrefs.enableReranker`; fallback gracefully
  - [x] Return top N with full metadata for UI/Chat
 
@@ -99,8 +99,8 @@ Phase 7.1 — Preferences & Resilience
 - [x] Offscreen lifecycle: single-instance reuse; reconnection logic; retries with backoff
 
 Phase 7.2 — Error Handling & Fallbacks
-- [x] FTS5 absent → LIKE fallback; log in debug
-- [x] sqlite-vec absent → text-only mode; log in debug
+- [x] PostgreSQL FTS fail → ILIKE fallback; log in debug
+- [x] pgvector absent → text-only mode; log in debug
  - [x] Embedding model load fail → text-only; retry option
 - [x] Prompt session fail → structured response fallback
 
@@ -113,7 +113,7 @@ Phase 8.2 — Performance Tuning
 - [ ] Gate heavy reranker on capable devices; add toggle in Debug
 
 Phase 8.3 — Code Cleanup & Optimization
-- [x] Force IndexedDB VFS (remove OPFS complexity as not suitable for use case)
+- [x] Use PGlite with IndexedDB storage (no OPFS needed)
 - [x] Clean up trial-and-error leftover code and redundant fallbacks
 - [x] Remove excessive debug logging and simplify overly defensive patterns
 - [x] Streamline debug.html UI (remove non-functional extraction testing)

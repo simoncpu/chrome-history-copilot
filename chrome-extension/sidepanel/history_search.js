@@ -196,11 +196,11 @@ function setupEventListeners() {
 }
 
 function setupTabNavigation() {
-  const tabButtons = document.querySelectorAll('.tab-button');
+  const tabButtons = document.querySelectorAll('.tab');
 
   tabButtons.forEach(button => {
     button.addEventListener('click', (e) => {
-      const targetPage = e.target.dataset.page;
+      const targetPage = e.currentTarget.dataset.page;
       if (targetPage === 'chat') {
         // Navigate to chat page
         window.location.href = 'history_chat.html';

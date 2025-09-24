@@ -22,20 +22,19 @@
         </div>
       </div>
     </div>
-    <!-- Header -->
-    <header class="header">
-      <h1 class="title">AI History Chat</h1>
-      <div class="nav-tabs" role="tablist" aria-label="Navigation">
-        <button class="tab-button" data-page="search" role="tab" aria-selected="false" aria-controls="search-panel">
-          <span class="tab-button-icon" aria-hidden="true">🔍</span>
-          Search
-        </button>
-        <button class="tab-button active" data-page="chat" role="tab" aria-selected="true" aria-controls="chat-panel">
-          <span class="tab-button-icon" aria-hidden="true">💬</span>
-          Chat
-        </button>
+    <!-- Browser-style Tabs -->
+    <div class="browser-tabs" role="tablist" aria-label="Navigation">
+      <div class="tab-bar">
+        <div class="tab" data-page="search" role="tab" aria-selected="false" aria-controls="search-panel">
+          <span class="tab-icon" aria-hidden="true">🔍</span>
+          <span class="tab-title">Search</span>
+        </div>
+        <div class="tab active" data-page="chat" role="tab" aria-selected="true" aria-controls="chat-panel">
+          <span class="tab-icon" aria-hidden="true">💬</span>
+          <span class="tab-title">Chat</span>
+        </div>
       </div>
-    </header>
+    </div>
 
     <!-- Chat Interface -->
     <main class="main-content chat-layout">

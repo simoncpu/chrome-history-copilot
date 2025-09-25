@@ -171,15 +171,32 @@ Normalization & Scoring
 - Suggested defaults: `w_vec=0.5, w_bm25=0.3, w_recency=0.1, w_visits=0.1` (tune as needed).
 
 
+## Browser History Integration
+
+The extension combines Chrome's browser history API with PGlite database for comprehensive search results:
+
+**Search Behavior:**
+- **Empty query**: Shows all browser history from the past 90 days, merged with PGlite data
+- **Search query**: Combines results from both PGlite search and Chrome history search
+- **Deduplication**: URLs present in both sources show PGlite data (with AI summaries) preferentially
+- **90-day retention**: Only considers browser history from the last 90 days (automatic filtering)
+
+**Result Display:**
+- **AI Summary badge** (🤖): Indicates entries with AI-generated summaries from PGlite
+- **Source badge**: Shows "Indexed" for PGlite entries, "Browser" for history-only entries
+- **Fallback summaries**: Browser-only entries show "No AI summary available yet. Visit this page to generate one."
+- **Progressive enhancement**: As users revisit pages, summaries are generated and stored
+
 ## Side Panel UI
 
 Two pages; user can toggle between them. Remember the last‑used page and search mode in `chrome.storage.local`.
 
 1) history_search.html (default)
 - Layout:
-  - Input with debounced search
+  - Input with debounced search (empty query shows all 90-day history)
   - Results list with favicon (`chrome://favicon`) + title + URL + short summary/snippet
-  - Infinite scroll or “Load more”
+  - Visual badges for AI summaries and source type (PGlite vs browser history)
+  - Infinite scroll or "Load more"
   - Loader while querying (skeleton rows or spinner)
 - Advanced panel (slide down/out) allows switching mode: Hybrid+Rerank (default), Hybrid (RRF), Text only, Vector only. Persist selection.
 - Provide clear empty state and robust error handling.
@@ -281,22 +298,47 @@ Ignore
 
 ```js
 async function hybridSearch(query, { mode = 'hybrid-rerank', limit = 25 } = {}) {
-  const textTop = await db.fullTextSearch(query, { k: 100 });  // PostgreSQL FTS
-  const queryVec = await embed(query);
-  const vecTop = await db.vectorSearch(queryVec, { k: 100 });  // pgvector search
-
-  let candidates;
-  if (mode === 'hybrid-rrf') {
-    candidates = rrfMerge(textTop, vecTop, { k: 60 });
-  } else if (mode === 'text') {
-    candidates = textTop;
-  } else if (mode === 'vector') {
-    candidates = vecTop;
-  } else { // 'hybrid-rerank'
-    const merged = rrfMerge(bm25Top, vecTop, { k: 60 });
-    candidates = await rerank(query, merged); // weighted hybrid + optional cross-encoder
+  // Handle empty queries: show combined history
+  if (!query || query.trim().length === 0) {
+    return await getCombinedHistory({ limit });
   }
-  return candidates.slice(0, limit);
+
+  // Get results from both PGlite and Chrome history
+  const [pgliteResults, browserResults] = await Promise.allSettled([
+    // PGlite search with embeddings
+    (async () => {
+      const queryVec = await embed(query);
+      return await db.search(query, { mode, limit: Math.ceil(limit * 1.5), queryVec });
+    })(),
+    // Chrome browser history search (90-day filtered)
+    chrome.history.search({
+      text: query,
+      startTime: Date.now() - (90 * 24 * 60 * 60 * 1000)
+    })
+  ]);
+
+  // Merge and deduplicate results (PGlite takes priority)
+  const merged = mergeHistoryResults(
+    pgliteResults.value || [],
+    browserResults.value || []
+  );
+
+  return merged.slice(0, limit);
+}
+
+async function getCombinedHistory({ limit = 25 }) {
+  // Get all browser history from last 90 days
+  const browserHistory = await chrome.history.search({
+    text: '',
+    startTime: Date.now() - (90 * 24 * 60 * 60 * 1000),
+    maxResults: 1000
+  });
+
+  // Get PGlite entries (no search, just recent)
+  const pgliteResults = await db.search('', { mode: 'text', limit: 1000 });
+
+  // Merge, deduplicate, and sort by last visit time
+  return mergeHistoryResults(pgliteResults, browserHistory).slice(0, limit);
 }
 ```
 
@@ -345,6 +387,7 @@ async function answerQuery(query) {
 
 ## Future Work (Non‑blocking)
 
+- **Automatic 90-day retention policy**: Implement background cleanup job using Chrome alarms API to automatically prune PGlite database entries older than 90 days
 - Chunk‑level embeddings for long pages.
 - On‑device cross‑encoder reranker improvements or knowledge distillation for speed.
 - Per‑domain ranking features; personalization toggles.
@@ -362,3 +405,4 @@ async function answerQuery(query) {
 - Ignore folders that are named prototype_*/ unless explicitly referenced.
 - Some code might still contain assumption that was left when we still used sqlite-wasm and sqlite-vec. Do not use that assumption. New assumption is that we're now using pglite with pgvector.
 - Do not read the WASM pglite library when debugging because it's too large. Browse online documentation instead. Show that you require more information so that I can assist.
+- add a task where we need to automatically prune pglite so that it will only store websites visited in the last 90 days.

@@ -96,9 +96,14 @@ async function loadAndExecuteLastSearch() {
 
       // Auto-execute the search
       performSearch(lastQuery, 0, true);
+    } else {
+      // If no saved query, show default combined history (empty search)
+      performSearch('', 0, true);
     }
   } catch (error) {
     console.error('[SEARCH] Failed to load and execute last search:', error);
+    // Fallback: still try to show combined history
+    performSearch('', 0, true);
   }
 }
 
@@ -254,8 +259,9 @@ function handleSearchInput(e) {
   searchTimeout = setTimeout(() => {
     if (query.length >= 2) {
       performSearch(query);
-    } else if (query.length === 0) {
-      showEmptyState();
+    } else {
+      // For empty queries or single characters, show combined browser history
+      performSearch('');
     }
   }, 300);
 }
@@ -381,6 +387,7 @@ async function performSearch(query, offset = 0, isAutoLoad = false) {
     }
 
     const results = response.results || [];
+    console.log('[SEARCH] Got results from offscreen:', results.length, 'first few:', results.slice(0, 3));
 
     if (offset === 0) {
       currentResults = results;
@@ -556,11 +563,34 @@ function createResultElement(result) {
   // Snippet
   const snippet = document.createElement('p');
   snippet.className = 'result-snippet';
-  snippet.textContent = result.summary || result.snippet || 'No description available';
+
+  // Handle different result sources and show appropriate content
+  if (result.source === 'browser' && !result.hasAiSummary) {
+    snippet.textContent = 'No AI summary available yet. Visit this page to generate one.';
+    snippet.classList.add('no-summary');
+  } else {
+    snippet.textContent = result.summary || result.snippet || 'No description available';
+  }
 
   // Metadata container
   const metadata = document.createElement('div');
   metadata.className = 'result-metadata';
+
+  // AI Summary indicator badge (for entries with AI summaries)
+  if (result.hasAiSummary || (result.source === 'pglite' && (result.summary || result.content_text))) {
+    const aiSummaryBadge = document.createElement('span');
+    aiSummaryBadge.className = 'ai-summary-badge';
+    aiSummaryBadge.innerHTML = '🤖 AI Summary';
+    metadata.appendChild(aiSummaryBadge);
+  }
+
+  // Source indicator (for debugging/transparency)
+  if (result.source) {
+    const sourceBadge = document.createElement('span');
+    sourceBadge.className = `source-badge source-${result.source}`;
+    sourceBadge.textContent = result.source === 'pglite' ? 'Indexed' : 'Browser';
+    metadata.appendChild(sourceBadge);
+  }
 
   // Search mode badge (moved from header)
   const modeBadge = createSearchModeBadge(getSelectedSearchMode());
@@ -925,7 +955,7 @@ function escapeHtml(text) {
 
 // Real-time status update listener
 function setupStatusUpdateListener() {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'status_update') {
       handleStatusUpdate(message.event, message.data);
     }

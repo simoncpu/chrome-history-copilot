@@ -140,8 +140,8 @@ async function forwardToOffscreen(message, sendResponse, retryCount = 0) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    // Forward the message
-    const response = await chrome.runtime.sendMessage(message);
+    // Forward the message specifically to offscreen document
+    const response = await sendToOffscreenWithRetry(message);
     sendResponse(response);
 
   } catch (error) {
@@ -196,6 +196,39 @@ async function sendToOffscreenWithRetry(message, retryCount = 0) {
     } else {
       throw new Error(`Offscreen communication failed after ${maxRetries} retries: ${error.message}`);
     }
+  }
+}
+
+// Chrome history API integration
+async function getChromeHistory({ query = '', limit = 1000 } = {}, sendResponse) {
+  try {
+    console.log('[BG] getChromeHistory called with query:', query, 'limit:', limit);
+    // Filter to last 90 days
+    const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+
+    const historyItems = await chrome.history.search({
+      text: query,
+      startTime: ninetyDaysAgo,
+      maxResults: limit
+    });
+
+    console.log('[BG] Chrome history API returned:', historyItems.length, 'items');
+
+    // Convert to consistent format and filter out internal Chrome URLs
+    const results = historyItems
+      .filter(item => !isInternalUrl(item.url))
+      .map(item => ({
+        url: item.url,
+        title: item.title || 'Untitled',
+        lastVisitTime: item.lastVisitTime,
+        visitCount: item.visitCount || 1
+      }));
+
+    console.log('[BG] Sending response with', results.length, 'results');
+    sendResponse({ results });
+  } catch (error) {
+    console.error('[BG] Failed to fetch Chrome history:', error);
+    sendResponse({ error: error.message, results: [] });
   }
 }
 
@@ -292,6 +325,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         performanceMetrics: performanceMetrics
       });
       break;
+
+    case 'get-chrome-history':
+      getChromeHistory(message.data, sendResponse);
+      return true; // Async response
 
     default:
       console.warn('[BG] Unknown message type:', message.type);
@@ -532,9 +569,13 @@ function isInternalUrl(url) {
   // Skip internal Chrome/Edge pages and extension pages
   return url.startsWith('chrome://') ||
          url.startsWith('chrome-extension://') ||
+         url.startsWith('moz-extension://') ||
          url.startsWith('edge://') ||
          url.startsWith('about:') ||
-         url.startsWith('file://');
+         url.startsWith('file://') ||
+         url.startsWith('data:') ||
+         url.startsWith('blob:') ||
+         url.startsWith('javascript:');
 }
 
 function debounceTabUpdate(tabId, pageInfo) {

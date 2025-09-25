@@ -31,7 +31,21 @@ let summaryQueueStats = {
 };
 
 // Message handling
+// Define messages that this offscreen document should handle
+const OFFSCREEN_MESSAGE_TYPES = new Set([
+  'init', 'ingest-page', 'ingest-captured-payload', 'ingest-captured-queue',
+  'search', 'get-browser-history', 'embed', 'clear-db', 'get-stats', 'page-exists',
+  'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary',
+  'ping', 'refresh-ai-prefs', 'reload-embeddings', 'get-model-status',
+  'start-remote-warm', 'get-summary-queue-stats', 'process-summary-queue',
+  'clear-summary-queue'
+]);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Only handle messages intended for the offscreen document
+  if (!OFFSCREEN_MESSAGE_TYPES.has(message.type)) {
+    return; // Let other contexts handle this message
+  }
 
   handleMessage(message, sendResponse);
   return true; // Keep message channel open for async responses
@@ -72,6 +86,11 @@ async function handleMessage(message, sendResponse) {
       case 'search':
         const searchResults = await search(message.data);
         sendResponse(searchResults);
+        break;
+
+      case 'get-browser-history':
+        const browserHistory = await getBrowserHistory(message.data);
+        sendResponse(browserHistory);
         break;
 
       case 'embed':
@@ -502,6 +521,15 @@ class DatabaseWrapper {
         FROM pages,
              plainto_tsquery('english', $1) AS query
         WHERE content_tsvector @@ query
+          AND url NOT LIKE 'chrome://%'
+          AND url NOT LIKE 'chrome-extension://%'
+          AND url NOT LIKE 'moz-extension://%'
+          AND url NOT LIKE 'edge://%'
+          AND url NOT LIKE 'about:%'
+          AND url NOT LIKE 'file://%'
+          AND url NOT LIKE 'data:%'
+          AND url NOT LIKE 'blob:%'
+          AND url NOT LIKE 'javascript:%'
         ORDER BY bm25_score DESC, last_visit_at DESC
         LIMIT $2 OFFSET $3
       `, [query, limit, offset]);
@@ -518,7 +546,16 @@ class DatabaseWrapper {
             0.5 AS bm25_score,
             content_text AS snippet
           FROM pages
-          WHERE title ILIKE $1 OR content_text ILIKE $1
+          WHERE (title ILIKE $1 OR content_text ILIKE $1)
+            AND url NOT LIKE 'chrome://%'
+            AND url NOT LIKE 'chrome-extension://%'
+            AND url NOT LIKE 'moz-extension://%'
+            AND url NOT LIKE 'edge://%'
+            AND url NOT LIKE 'about:%'
+            AND url NOT LIKE 'file://%'
+            AND url NOT LIKE 'data:%'
+            AND url NOT LIKE 'blob:%'
+            AND url NOT LIKE 'javascript:%'
           ORDER BY last_visit_at DESC
           LIMIT $2 OFFSET $3
         `, [`%${query}%`, limit, offset]);
@@ -550,6 +587,15 @@ class DatabaseWrapper {
           embedding <=> $1::vector AS distance
         FROM pages
         WHERE embedding IS NOT NULL
+          AND url NOT LIKE 'chrome://%'
+          AND url NOT LIKE 'chrome-extension://%'
+          AND url NOT LIKE 'moz-extension://%'
+          AND url NOT LIKE 'edge://%'
+          AND url NOT LIKE 'about:%'
+          AND url NOT LIKE 'file://%'
+          AND url NOT LIKE 'data:%'
+          AND url NOT LIKE 'blob:%'
+          AND url NOT LIKE 'javascript:%'
         ORDER BY embedding <=> $1::vector
         LIMIT $2 OFFSET $3
       `, [embeddingArray, limit, offset]);
@@ -1016,20 +1062,182 @@ async function ingestCapturedQueue() {
   }
 }
 
-// Search implementation
-async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
-
+// Helper function to get combined history for empty queries
+async function getCombinedHistory({ limit = 25, offset = 0 }) {
   try {
-    const queryEmbedding = await embed(query);
+    // Get browser history from last 90 days
+    const browserResponse = await getBrowserHistory({ query: '', limit: 1000 });
+    const browserResults = browserResponse.results || [];
+    console.log('[OFFSCREEN] Browser history results:', browserResults.length, browserResults.slice(0, 3));
 
-    const results = await db.search(query, {
-      mode,
-      limit,
-      offset,
-      queryEmbedding
+    // Get all PGlite data (no search, just recent entries)
+    // For empty queries, we need to get all pages sorted by last visit
+    const pgliteResults = await db.db.query(`
+      SELECT
+        id, url, domain, title, content_text, summary, favicon_url,
+        first_visit_at, last_visit_at, visit_count,
+        NULL as score,
+        COALESCE(substring(content_text from 1 for 200), title) as snippet
+      FROM pages
+      WHERE url NOT LIKE 'chrome://%'
+        AND url NOT LIKE 'chrome-extension://%'
+        AND url NOT LIKE 'moz-extension://%'
+        AND url NOT LIKE 'edge://%'
+        AND url NOT LIKE 'about:%'
+        AND url NOT LIKE 'file://%'
+        AND url NOT LIKE 'data:%'
+        AND url NOT LIKE 'blob:%'
+        AND url NOT LIKE 'javascript:%'
+      ORDER BY last_visit_at DESC
+      LIMIT 1000
+    `);
+
+    // Convert to expected format
+    const formattedPgliteResults = pgliteResults.rows || [];
+    console.log('[OFFSCREEN] PGlite results:', formattedPgliteResults.length, formattedPgliteResults.slice(0, 2));
+
+    // Merge results
+    const mergedResults = mergeHistoryResults(formattedPgliteResults, browserResults);
+    console.log('[OFFSCREEN] Merged results:', mergedResults.length, mergedResults.slice(0, 2));
+
+    // Apply pagination
+    const startIndex = offset;
+    const endIndex = startIndex + limit;
+    const paginatedResults = mergedResults.slice(startIndex, endIndex);
+
+    return { results: paginatedResults };
+  } catch (error) {
+    console.error('[OFFSCREEN] getCombinedHistory failed:', error);
+    // Fallback to just browser history
+    try {
+      const browserResponse = await getBrowserHistory({ query: '', limit });
+      return { results: browserResponse.results || [] };
+    } catch (fallbackError) {
+      return { error: fallbackError.message };
+    }
+  }
+}
+
+// Helper function to merge and deduplicate results from PGlite and browser history
+function mergeHistoryResults(pgliteResults, browserResults) {
+  // Create a map keyed by URL for deduplication
+  const resultMap = new Map();
+
+  // Add PGlite results first (they have priority with AI summaries)
+  if (Array.isArray(pgliteResults)) {
+    pgliteResults.forEach(result => {
+      if (result.url) {
+        resultMap.set(result.url, {
+          ...result,
+          source: 'pglite',
+          hasAiSummary: !!(result.summary || result.content_text)
+        });
+      }
+    });
+  }
+
+  // Add browser history results, but don't overwrite PGlite data
+  if (Array.isArray(browserResults)) {
+    browserResults.forEach(result => {
+      if (result.url && !resultMap.has(result.url)) {
+        resultMap.set(result.url, {
+          id: null,
+          url: result.url,
+          title: result.title || 'Untitled',
+          domain: extractDomain(result.url),
+          content_text: null,
+          summary: null,
+          favicon_url: null,
+          first_visit_at: result.lastVisitTime || Date.now(),
+          last_visit_at: result.lastVisitTime || Date.now(),
+          visit_count: result.visitCount || 1,
+          source: 'browser',
+          hasAiSummary: false,
+          score: null
+        });
+      }
+    });
+  }
+
+  // Convert map to array and sort by last visit time (most recent first)
+  const mergedArray = Array.from(resultMap.values());
+  mergedArray.sort((a, b) => {
+    const timeA = a.last_visit_at || 0;
+    const timeB = b.last_visit_at || 0;
+    return timeB - timeA; // Descending order (newest first)
+  });
+
+  return mergedArray;
+}
+
+// Helper function to extract domain from URL
+function extractDomain(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+// Browser history integration
+async function getBrowserHistory({ query = '', limit = 1000 } = {}) {
+  try {
+    // Request browser history via background script (since offscreen can't access chrome.history directly)
+    console.log('[OFFSCREEN] Requesting browser history from background...');
+    const response = await chrome.runtime.sendMessage({
+      type: 'get-chrome-history',
+      data: { query, limit }
     });
 
-    return { results };
+    console.log('[OFFSCREEN] Browser history response:', response);
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    return { results: response.results || [] };
+  } catch (error) {
+    console.error('[OFFSCREEN] Browser history fetch failed:', error);
+    return { error: error.message };
+  }
+}
+
+// Search implementation with browser history integration
+async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
+  try {
+    // For empty queries, return combined browser history + PGlite data
+    if (!query || query.trim().length === 0) {
+      return await getCombinedHistory({ limit, offset });
+    }
+
+    // For search queries, get results from both sources
+    const [pgliteResponse, browserResponse] = await Promise.allSettled([
+      // PGlite search with embeddings
+      (async () => {
+        const queryEmbedding = await embed(query);
+        return await db.search(query, {
+          mode,
+          limit: Math.ceil(limit * 1.5), // Get more results for merging
+          offset: 0, // Always start from beginning for merging
+          queryEmbedding
+        });
+      })(),
+      // Browser history search
+      getBrowserHistory({ query, limit: Math.ceil(limit * 1.5) })
+    ]);
+
+    const pgliteResults = pgliteResponse.status === 'fulfilled' ? pgliteResponse.value : [];
+    const browserResults = browserResponse.status === 'fulfilled' ? browserResponse.value.results || [] : [];
+
+    // Merge and deduplicate results
+    const mergedResults = mergeHistoryResults(pgliteResults, browserResults);
+
+    // Apply pagination
+    const startIndex = offset;
+    const endIndex = startIndex + limit;
+    const paginatedResults = mergedResults.slice(startIndex, endIndex);
+
+    return { results: paginatedResults };
   } catch (error) {
     console.error('[OFFSCREEN] Search failed:', error);
     return { error: error.message };

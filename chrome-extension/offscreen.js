@@ -1234,13 +1234,29 @@ function mergeHistoryResults(pgliteResults, browserResults) {
     });
   }
 
-  // Convert map to array and sort by last visit time (most recent first)
+  // Convert map to array and sort appropriately
   const mergedArray = Array.from(resultMap.values());
-  mergedArray.sort((a, b) => {
-    const timeA = a.last_visit_at || 0;
-    const timeB = b.last_visit_at || 0;
-    return timeB - timeA; // Descending order (newest first)
-  });
+
+  // Check if results have scores from search
+  const hasScores = mergedArray.some(item =>
+    item.score !== undefined && item.score !== null
+  );
+
+  if (hasScores) {
+    // Sort by score descending for search results
+    mergedArray.sort((a, b) => {
+      const scoreA = a.score || a.finalScore || a.rrfScore || 0;
+      const scoreB = b.score || b.finalScore || b.rrfScore || 0;
+      return scoreB - scoreA;
+    });
+  } else {
+    // Sort by last visit time for browsing (empty query)
+    mergedArray.sort((a, b) => {
+      const timeA = a.last_visit_at || 0;
+      const timeB = b.last_visit_at || 0;
+      return timeB - timeA; // Descending order (newest first)
+    });
+  }
 
   return mergedArray;
 }

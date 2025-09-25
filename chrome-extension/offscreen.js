@@ -191,7 +191,12 @@ async function handleMessage(message, sendResponse) {
         break;
 
       case 'get-summary-queue-stats':
-        sendResponse({ status: 'ok', stats: getSummaryQueueStats() });
+        try {
+          const stats = await getSummaryQueueStats();
+          sendResponse({ status: 'ok', stats });
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
         break;
 
       case 'process-summary-queue':
@@ -204,8 +209,12 @@ async function handleMessage(message, sendResponse) {
         break;
 
       case 'clear-summary-queue':
-        clearSummaryQueue();
-        sendResponse({ status: 'ok', message: 'Summary queue cleared' });
+        try {
+          await clearSummaryQueue();
+          sendResponse({ status: 'ok', message: 'Summary queue cleared' });
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
         break;
 
       default:
@@ -307,6 +316,17 @@ async function initializeDatabase() {
 
     // Initialize schema
     await db.initializeSchema();
+
+    // Set up LISTEN/NOTIFY for queue notifications
+    console.log('[QUEUE-NOTIFY] Setting up listener for summarization queue...');
+    await db.db.listen('summarization_queue_channel', (payload) => {
+      console.log(`[QUEUE-NOTIFY] Received notification: ${payload}`);
+      if (payload === 'new_item' && !isProcessingSummaries) {
+        console.log('[QUEUE-NOTIFY] Starting queue processing due to notification');
+        processSummaryQueue();
+      }
+    });
+    console.log('[QUEUE-NOTIFY] ✅ Queue listener registered successfully');
 
     console.log('[DB] Database initialized successfully');
 
@@ -423,6 +443,30 @@ class DatabaseWrapper {
         FOR EACH ROW
         EXECUTE FUNCTION update_content_tsvector();
     `);
+
+    // Create summarization queue table for database-backed queue
+    console.log('[QUEUE-DB] Creating summarization queue table...');
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS summarization_queue (
+        id SERIAL PRIMARY KEY,
+        url TEXT UNIQUE NOT NULL,
+        title TEXT,
+        domain TEXT,
+        content_text TEXT,
+        attempts INTEGER DEFAULT 0,
+        max_attempts INTEGER DEFAULT 3,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP
+      )
+    `);
+
+    // Create index for efficient queue processing
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_summarization_queue_status
+      ON summarization_queue(status, created_at);
+    `);
+    console.log('[QUEUE-DB] ✅ Summarization queue table created successfully');
 
     this._isVecTable = true;
   }
@@ -849,11 +893,14 @@ async function ingestPage(pageInfo) {
       summary = buildFallbackSummary(content.text, content.title, pageInfo.url);
       // Queue for AI summarization if content is substantial
       if (content.text && content.text.trim().length > 100) {
+        // Queue asynchronously without blocking ingestion
         queueForSummarization(pageInfo.url, {
           text: content.text,
           title: content.title,
           url: pageInfo.url,
           domain: new URL(pageInfo.url).hostname
+        }).catch(error => {
+          console.error(`[SUMMARIZATION] Failed to queue item: ${pageInfo.url}`, error);
         });
       }
     }
@@ -917,11 +964,14 @@ async function ingestCapturedContent(capturedData) {
       summary = buildFallbackSummary(capturedData.text || '', capturedData.title || '', capturedData.url);
       // Queue for AI summarization if content is substantial
       if (capturedData.text && capturedData.text.trim().length > 100) {
+        // Queue asynchronously without blocking ingestion
         queueForSummarization(capturedData.url, {
           text: capturedData.text,
           title: capturedData.title,
           url: capturedData.url,
           domain: capturedData.domain
+        }).catch(error => {
+          console.error(`[SUMMARIZATION] Failed to queue captured item: ${capturedData.url}`, error);
         });
       }
     }
@@ -1493,68 +1543,103 @@ async function importDatabase(data) {
 }
 
 // Summarization queue functions
-function queueForSummarization(url, data) {
+async function queueForSummarization(url, data) {
   console.log(`[SUMMARIZATION] Queueing page for summarization: ${url}`);
   console.table({ url, title: data.title, domain: data.domain, contentLength: data.text?.length || 0 });
 
-  // Check if already in queue
-  const existing = summarizationQueue.find(item => item.url === url);
-  if (existing) {
-    console.log(`[SUMMARIZATION] Page already in queue: ${url}`);
-    return;
-  }
+  try {
+    // Insert into database queue (ON CONFLICT DO NOTHING prevents duplicates)
+    console.log(`[QUEUE-DB] Adding item to database queue: ${url}`);
+    const result = await db.db.query(`
+      INSERT INTO summarization_queue (url, title, domain, content_text)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (url) DO NOTHING
+      RETURNING id
+    `, [url, data.title || '', data.domain || '', data.text || '']);
 
-  const queueItem = {
-    id: Date.now() + Math.random(), // Simple unique ID
-    url,
-    data,
-    timestamp: Date.now(),
-    attempts: 0,
-    maxAttempts: 3
-  };
+    if (result.rows.length > 0) {
+      console.log(`[QUEUE-DB] ✅ Item added to queue with ID: ${result.rows[0].id}`);
 
-  summarizationQueue.push(queueItem);
-  summaryQueueStats.queued = summarizationQueue.length;
-
-  console.log(`[SUMMARIZATION] Queue updated. Total queued: ${summarizationQueue.length}`);
-
-  // Start processing if not already running
-  if (!isProcessingSummaries) {
-    processSummaryQueue();
+      // Notify listeners that a new item was added
+      await db.db.query("NOTIFY summarization_queue_channel, 'new_item'");
+      console.log(`[QUEUE-NOTIFY] Notification sent for new queue item: ${url}`);
+    } else {
+      console.log(`[QUEUE-DB] Item already exists in queue: ${url}`);
+    }
+  } catch (error) {
+    console.error(`[QUEUE-DB] Failed to add item to queue: ${url}`, error);
   }
 }
 
-function getSummaryQueueStats() {
-  const stats = {
-    ...summaryQueueStats,
-    queueLength: summarizationQueue.length,
-    isProcessing: isProcessingSummaries
-  };
+async function getSummaryQueueStats() {
+  try {
+    // Get real-time stats from database
+    const result = await db.db.query(`
+      SELECT
+        status,
+        COUNT(*) as count
+      FROM summarization_queue
+      GROUP BY status
+      UNION ALL
+      SELECT 'total' as status, COUNT(*) as count
+      FROM summarization_queue
+    `);
 
-  // Commented out to reduce log noise - only uncomment for debugging
-  // console.log(`[SUMMARIZATION] Queue Stats:`, stats);
-  // if (summarizationQueue.length > 0) {
-  //   console.log(`[SUMMARIZATION] Queued items:`, summarizationQueue.map(item => ({
-  //     url: item.url,
-  //     title: item.data.title,
-  //     domain: item.data.domain,
-  //     attempts: item.attempts
-  //   })));
-  // }
+    const statsMap = {};
+    result.rows.forEach(row => {
+      statsMap[row.status] = parseInt(row.count);
+    });
 
-  return stats;
+    const stats = {
+      queued: statsMap.pending || 0,
+      processing: statsMap.processing || 0,
+      completed: statsMap.completed || 0,
+      failed: statsMap.failed || 0,
+      total: statsMap.total || 0,
+      queueLength: statsMap.pending || 0, // Legacy compatibility
+      isProcessing: isProcessingSummaries,
+      currentlyProcessing: summaryQueueStats.currentlyProcessing
+    };
+
+    return stats;
+  } catch (error) {
+    console.error('[QUEUE-DB] Failed to get queue stats:', error);
+    // Return fallback stats
+    return {
+      queued: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      queueLength: 0,
+      isProcessing: isProcessingSummaries,
+      currentlyProcessing: summaryQueueStats.currentlyProcessing
+    };
+  }
 }
 
-function clearSummaryQueue() {
-  console.log(`[SUMMARIZATION] Clearing queue with ${summarizationQueue.length} items`);
-  summarizationQueue = [];
-  summaryQueueStats = {
-    queued: 0,
-    processing: 0,
-    completed: 0,
-    failed: 0,
-    currentlyProcessing: null
-  };
+async function clearSummaryQueue() {
+  try {
+    // Get current queue stats for logging
+    const currentStats = await getSummaryQueueStats();
+    console.log(`[QUEUE-DB] Clearing queue with ${currentStats.total} items`);
+
+    // Clear the database table
+    await db.db.query('TRUNCATE TABLE summarization_queue RESTART IDENTITY');
+    console.log('[QUEUE-DB] ✅ Queue cleared successfully');
+
+    // Reset in-memory stats
+    summaryQueueStats = {
+      queued: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      currentlyProcessing: null
+    };
+  } catch (error) {
+    console.error('[QUEUE-DB] Failed to clear queue:', error);
+    throw error;
+  }
 }
 
 async function processSummaryQueue() {
@@ -1563,36 +1648,61 @@ async function processSummaryQueue() {
     return;
   }
 
-  if (summarizationQueue.length === 0) {
+  // Check for pending items in database
+  let pendingItems;
+  try {
+    const result = await db.db.query(`
+      SELECT id, url, title, domain, content_text, attempts, max_attempts
+      FROM summarization_queue
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+    `);
+    pendingItems = result.rows || [];
+  } catch (error) {
+    console.error('[QUEUE-DB] Failed to query pending items:', error);
+    return;
+  }
+
+  if (pendingItems.length === 0) {
     console.log('[SUMMARIZATION] No items in queue to process');
     return;
   }
 
   isProcessingSummaries = true;
-  console.log(`[SUMMARIZATION] Starting queue processing. ${summarizationQueue.length} items to process`);
+  console.log(`[SUMMARIZATION] Starting queue processing. ${pendingItems.length} items to process`);
   console.group('📝 Summarization Queue Processing');
 
-  while (summarizationQueue.length > 0) {
-    const item = summarizationQueue.shift();
-    summaryQueueStats.queued = summarizationQueue.length;
+  for (const item of pendingItems) {
+    // Update item status to processing
+    try {
+      await db.db.query(`
+        UPDATE summarization_queue
+        SET status = 'processing', attempts = attempts + 1
+        WHERE id = $1
+      `, [item.id]);
+    } catch (error) {
+      console.error(`[QUEUE-DB] Failed to update item status: ${item.url}`, error);
+      continue;
+    }
+
     summaryQueueStats.currentlyProcessing = {
       url: item.url,
-      title: item.data.title || 'Untitled',
-      domain: item.data.domain || '',
+      title: item.title || 'Untitled',
+      domain: item.domain || '',
       attempt: item.attempts + 1,
-      maxAttempts: item.maxAttempts
+      maxAttempts: item.max_attempts
     };
 
-    console.log(`[SUMMARIZATION] Processing: ${item.url} (attempt ${item.attempts + 1}/${item.maxAttempts})`);
+    console.log(`[SUMMARIZATION] Processing: ${item.url} (attempt ${item.attempts + 1}/${item.max_attempts})`);
 
     try {
       summaryQueueStats.processing++;
 
       // Try to generate AI summary
       const aiSummary = await trySummarizeOffscreen(
-        item.data.text,
-        item.data.url,
-        item.data.title
+        item.content_text,
+        item.url,
+        item.title
       );
 
       if (aiSummary && typeof aiSummary === 'string' && aiSummary.trim().length > 0) {
@@ -1603,14 +1713,21 @@ async function processSummaryQueue() {
           console.log(`[SUMMARIZATION] ✅ Successfully updated summary for: ${item.url}`);
           summaryQueueStats.completed++;
 
+          // Mark item as completed in queue
+          await db.db.query(`
+            UPDATE summarization_queue
+            SET status = 'completed', processed_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+          `, [item.id]);
+
           // Notify UI of summary completion for better user experience
           try {
             await chrome.runtime.sendMessage({
               type: 'content_summary_updated',
               data: {
                 url: item.url,
-                title: item.data.title,
-                domain: item.data.domain,
+                title: item.title,
+                domain: item.domain,
                 timestamp: Date.now()
               }
             });
@@ -1619,25 +1736,46 @@ async function processSummaryQueue() {
           }
         } else {
           console.warn(`[SUMMARIZATION] ⚠️ Failed to update database for: ${item.url}`, updateResult);
+          // Mark as failed
+          await db.db.query(`
+            UPDATE summarization_queue
+            SET status = 'failed', processed_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+          `, [item.id]);
           summaryQueueStats.failed++;
         }
       } else {
         // AI summarization failed, but don't retry - fallback summary already exists
         console.log(`[SUMMARIZATION] ℹ️ AI summarization unavailable for: ${item.url}, keeping fallback summary`);
+        // Mark as failed
+        await db.db.query(`
+          UPDATE summarization_queue
+          SET status = 'failed', processed_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `, [item.id]);
         summaryQueueStats.failed++;
       }
 
     } catch (error) {
       console.error(`[SUMMARIZATION] ❌ Error processing ${item.url}:`, error);
 
-      item.attempts++;
-      if (item.attempts < item.maxAttempts) {
-        console.log(`[SUMMARIZATION] 🔄 Retrying ${item.url} (attempt ${item.attempts + 1}/${item.maxAttempts})`);
-        // Add back to end of queue for retry
-        summarizationQueue.push(item);
-        summaryQueueStats.queued = summarizationQueue.length;
+      const newAttempts = item.attempts + 1;
+      if (newAttempts < item.max_attempts) {
+        console.log(`[SUMMARIZATION] 🔄 Will retry ${item.url} (attempt ${newAttempts + 1}/${item.max_attempts})`);
+        // Reset status to pending for retry
+        await db.db.query(`
+          UPDATE summarization_queue
+          SET status = 'pending'
+          WHERE id = $1
+        `, [item.id]);
       } else {
         console.error(`[SUMMARIZATION] 💀 Max attempts reached for: ${item.url}`);
+        // Mark as failed
+        await db.db.query(`
+          UPDATE summarization_queue
+          SET status = 'failed', processed_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `, [item.id]);
         summaryQueueStats.failed++;
       }
     }
@@ -1645,14 +1783,18 @@ async function processSummaryQueue() {
     summaryQueueStats.currentlyProcessing = null;
 
     // Add a small delay between processing items to avoid overwhelming the AI API
-    if (summarizationQueue.length > 0) {
-      console.log(`[SUMMARIZATION] Waiting 2s before next item... (${summarizationQueue.length} remaining)`);
+    const remainingItems = await db.db.query(`
+      SELECT COUNT(*) as count FROM summarization_queue WHERE status = 'pending'
+    `);
+    const remainingCount = remainingItems.rows[0]?.count || 0;
+
+    if (remainingCount > 0) {
+      console.log(`[SUMMARIZATION] Waiting 2s before next item... (${remainingCount} remaining)`);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
 
   isProcessingSummaries = false;
-  summaryQueueStats.queued = 0;
 
   console.log(`[SUMMARIZATION] ✅ Queue processing completed. Stats:`, {
     completed: summaryQueueStats.completed,
@@ -1666,10 +1808,4 @@ initialize().catch(error => {
   console.error('[OFFSCREEN] Failed to initialize:', error);
 });
 
-// Start summary queue processing periodically
-setInterval(() => {
-  if (!isProcessingSummaries && summarizationQueue.length > 0) {
-    console.log('[SUMMARIZATION] Periodic check: starting queue processing');
-    processSummaryQueue();
-  }
-}, 30000); // Check every 30 seconds
+console.log('[QUEUE-NOTIFY] Queue processing now uses LISTEN/NOTIFY - no polling required');

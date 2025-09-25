@@ -126,11 +126,36 @@ Notes
 - Persist/merge into `pages` (upsert by URL). Update `visit_count`, `last_visit_at`.
 - Generate embedding with Transformers.js (see below) and store in the `embedding` column.
 - Update tsvector column for full-text search indexing.
-- Optionally compute a short `summary` via `window.ai.summarizer` when idle or on demand.
+- Queue substantial content (>100 chars) for AI summarization via database-backed queue system.
+
+### AI Summarization Queue (Database-Backed)
+- **Architecture**: Uses PostgreSQL table `summarization_queue` with LISTEN/NOTIFY for instant processing
+- **No Polling**: Replaced 30-second intervals with real-time database notifications
+- **Persistent**: Queue survives extension restarts and can be queried via SQL in debug panel
+- **Status Tracking**: Items progress through states: `pending` → `processing` → `completed`/`failed`
+- **Retry Logic**: Failed items are retried up to 3 times before being marked as failed
+- **Rate Limiting**: 2-second delay between processing items to avoid overwhelming AI API
+
+Queue Schema:
+```sql
+CREATE TABLE summarization_queue (
+  id SERIAL PRIMARY KEY,
+  url TEXT UNIQUE NOT NULL,
+  title TEXT,
+  domain TEXT,
+  content_text TEXT,
+  attempts INTEGER DEFAULT 0,
+  max_attempts INTEGER DEFAULT 3,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  processed_at TIMESTAMP
+);
+```
 
 Performance/UX
-- Run heavy work in offscreen document. Queue ingestion tasks. Backoff if CPU busy or battery saver.
+- Run heavy work in offscreen document. Database-backed queue with instant notifications via LISTEN/NOTIFY.
 - Debounce repeated visits in short windows to avoid churn.
+- Queue processing starts immediately when new items are added (no polling delay).
 
 
 ## Embeddings and Models (Transformers.js)
@@ -226,10 +251,15 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 ## Debug Page (debug.html)
 
 - DB Explorer:
-  - Run arbitrary SQL (read‑only by default, with a guarded “Write mode” toggle).
+  - Run arbitrary SQL (read‑only by default, with a guarded "Write mode" toggle).
   - Inspect table counts, index health, and recent ingestion queue.
   - Buttons: Clear DB (drop and recreate tables), Clear Model Cache, Export DB, Import DB (optional).
-- Add a context menu entry (via `chrome.contextMenus`) named “AI History: Debug” that opens `debug.html` in a new tab.
+- **AI Summarization Queue Section**:
+  - Real-time queue stats (queued, processing, completed, failed)
+  - Currently processing item details
+  - Queue management buttons (Process Queue, Clear Queue)
+  - Sample SQL queries for queue inspection
+- Add a context menu entry (via `chrome.contextMenus`) named "AI History: Debug" that opens `debug.html` in a new tab.
 
 
 ## Background and Offscreen Orchestration

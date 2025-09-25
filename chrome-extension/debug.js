@@ -16,6 +16,9 @@ let grantAllSitesAccessBtn, grantCurrentSiteAccessBtn, checkCurrentSiteAccessBtn
 let queueLength, queueCompleted, queueFailed, queueStatusIndicator, queueStatusText;
 let currentlyProcessing, processingDetails;
 let refreshQueueStats, processQueue, clearQueue;
+// Queue debugging elements
+let addTestItem, addMultipleItems, testNotifications, startMonitoring, stopMonitoring;
+let showTimeline, resetStuckItems, cleanupOldItems, showQueueQueries;
 
 // Content analysis elements
 let analyzeRecentPages, showContentStats, testSearchModes;
@@ -61,7 +64,52 @@ const SAMPLE_QUERIES = [
 
   // Vector search examples
   'SELECT title, url, 1 - (embedding <=> \'[0.1,0.2,0.3]\') AS similarity FROM pages WHERE embedding IS NOT NULL ORDER BY embedding <=> \'[0.1,0.2,0.3]\' LIMIT 5;',
-  'SELECT COUNT(*) as vector_indexed FROM pages WHERE embedding IS NOT NULL;'
+  'SELECT COUNT(*) as vector_indexed FROM pages WHERE embedding IS NOT NULL;',
+
+  // === AI SUMMARIZATION QUEUE DEBUGGING ===
+  // Queue overview and status
+  'SELECT status, COUNT(*) as count FROM summarization_queue GROUP BY status ORDER BY status;',
+  'SELECT COUNT(*) as total_items FROM summarization_queue;',
+
+  // Pending items (ready for processing)
+  'SELECT id, url, title, domain, attempts, created_at FROM summarization_queue WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 10;',
+
+  // Failed items (need attention)
+  'SELECT url, title, attempts, status, created_at, processed_at FROM summarization_queue WHERE status = \'failed\' ORDER BY created_at DESC LIMIT 10;',
+
+  // Currently processing items
+  'SELECT id, url, title, status, attempts, created_at FROM summarization_queue WHERE status = \'processing\' ORDER BY created_at ASC;',
+
+  // Queue processing statistics
+  'SELECT status, COUNT(*) as count, AVG(attempts) as avg_attempts FROM summarization_queue WHERE processed_at IS NOT NULL GROUP BY status;',
+
+  // Recent queue activity (last 50 items)
+  'SELECT url, title, status, attempts, created_at, processed_at FROM summarization_queue ORDER BY COALESCE(processed_at, created_at) DESC LIMIT 50;',
+
+  // Retry statistics
+  'SELECT attempts, COUNT(*) as count FROM summarization_queue GROUP BY attempts ORDER BY attempts;',
+
+  // Queue performance analysis
+  'SELECT status, MIN(created_at) as oldest, MAX(created_at) as newest, COUNT(*) as count FROM summarization_queue GROUP BY status;',
+
+  // Items stuck in processing (potential issues)
+  'SELECT id, url, title, attempts, created_at FROM summarization_queue WHERE status = \'processing\' AND created_at < NOW() - INTERVAL \'10 minutes\';',
+
+  // Queue table structure
+  '\\d summarization_queue',
+
+  // === QUEUE MANAGEMENT QUERIES (Write Mode Required) ===
+  // Reset stuck processing items back to pending
+  'UPDATE summarization_queue SET status = \'pending\' WHERE status = \'processing\' AND created_at < NOW() - INTERVAL \'10 minutes\';',
+
+  // Clear completed items older than 7 days
+  'DELETE FROM summarization_queue WHERE status IN (\'completed\', \'failed\') AND processed_at < NOW() - INTERVAL \'7 days\';',
+
+  // Reset failed items for retry (use carefully)
+  'UPDATE summarization_queue SET status = \'pending\', attempts = 0 WHERE status = \'failed\';',
+
+  // Clear entire queue (nuclear option)
+  'TRUNCATE TABLE summarization_queue RESTART IDENTITY;'
 ];
 
 // Initialize when DOM is loaded
@@ -153,6 +201,17 @@ function initializeDOMElements() {
   refreshQueueStats = document.getElementById('refreshQueueStats');
   processQueue = document.getElementById('processQueue');
   clearQueue = document.getElementById('clearQueue');
+
+  // Queue debugging elements
+  addTestItem = document.getElementById('addTestItem');
+  addMultipleItems = document.getElementById('addMultipleItems');
+  testNotifications = document.getElementById('testNotifications');
+  startMonitoring = document.getElementById('startMonitoring');
+  stopMonitoring = document.getElementById('stopMonitoring');
+  showTimeline = document.getElementById('showTimeline');
+  resetStuckItems = document.getElementById('resetStuckItems');
+  cleanupOldItems = document.getElementById('cleanupOldItems');
+  showQueueQueries = document.getElementById('showQueueQueries');
 }
 
 function setupEventListeners() {
@@ -195,6 +254,17 @@ function setupEventListeners() {
   if (refreshQueueStats) refreshQueueStats.addEventListener('click', handleRefreshQueueStats);
   if (processQueue) processQueue.addEventListener('click', handleProcessQueue);
   if (clearQueue) clearQueue.addEventListener('click', handleClearQueue);
+
+  // Queue debugging tools
+  if (addTestItem) addTestItem.addEventListener('click', addTestQueueItem);
+  if (addMultipleItems) addMultipleItems.addEventListener('click', () => addMultipleTestItems(5));
+  if (testNotifications) testNotifications.addEventListener('click', testQueueNotifications);
+  if (startMonitoring) startMonitoring.addEventListener('click', startQueueMonitoring);
+  if (stopMonitoring) stopMonitoring.addEventListener('click', stopQueueMonitoring);
+  if (showTimeline) showTimeline.addEventListener('click', showQueueTimeline);
+  if (resetStuckItems) resetStuckItems.addEventListener('click', resetStuckItems);
+  if (cleanupOldItems) cleanupOldItems.addEventListener('click', handleCleanupOldItems);
+  if (showQueueQueries) showQueueQueries.addEventListener('click', showQueueSampleQueries);
 
   // Keyboard shortcuts
   sqlQuery.addEventListener('keydown', (e) => {
@@ -1034,6 +1104,326 @@ async function handleClearQueue() {
   }
 }
 
+// === QUEUE DEBUGGING FUNCTIONS ===
+
+// Add manual test items to the queue for testing
+async function addTestQueueItem() {
+  try {
+    const testUrl = `https://example.com/test-${Date.now()}`;
+    const testData = {
+      title: `Test Page ${new Date().toLocaleTimeString()}`,
+      domain: 'example.com',
+      text: 'This is test content for the summarization queue. '.repeat(10) +
+            'It contains enough text to trigger summarization processing. '.repeat(5) +
+            'This helps us test the queue functionality and LISTEN/NOTIFY system.'
+    };
+
+    log(`Adding test queue item: ${testUrl}`, 'info');
+
+    // Send message to offscreen to add queue item
+    const response = await chrome.runtime.sendMessage({
+      type: 'ingest-captured-payload',
+      data: {
+        url: testUrl,
+        title: testData.title,
+        domain: testData.domain,
+        text: testData.text,
+        timestamp: Date.now()
+      }
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    log(`✅ Test queue item added successfully: ${testUrl}`, 'info');
+
+    // Refresh queue stats to show the new item
+    setTimeout(() => handleRefreshQueueStats(), 500);
+
+  } catch (error) {
+    log(`❌ Failed to add test queue item: ${error.message}`, 'error');
+    console.error('[DEBUG] Add test queue item failed:', error);
+  }
+}
+
+// Add multiple test items for load testing
+async function addMultipleTestItems(count = 5) {
+  log(`Adding ${count} test queue items for load testing...`, 'info');
+
+  for (let i = 0; i < count; i++) {
+    await addTestQueueItem();
+    // Small delay to avoid overwhelming the system
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  log(`✅ Added ${count} test queue items`, 'info');
+}
+
+// Monitor queue processing in real-time
+let queueMonitorInterval = null;
+
+function startQueueMonitoring() {
+  if (queueMonitorInterval) {
+    clearInterval(queueMonitorInterval);
+  }
+
+  log('🔍 Starting real-time queue monitoring...', 'info');
+
+  queueMonitorInterval = setInterval(async () => {
+    try {
+      const statsResponse = await chrome.runtime.sendMessage({
+        type: 'get-summary-queue-stats'
+      });
+
+      if (statsResponse.error) {
+        throw new Error(statsResponse.error);
+      }
+
+      const stats = statsResponse.stats;
+
+      // Only log changes to reduce noise
+      const currentState = JSON.stringify(stats);
+      if (currentState !== window.lastQueueState) {
+        log(`Queue update: ${stats.queued} queued, ${stats.processing} processing, ${stats.completed} completed, ${stats.failed} failed`, 'debug');
+        window.lastQueueState = currentState;
+
+        // Update the UI stats
+        handleRefreshQueueStats();
+      }
+
+      // Alert if queue is stuck
+      if (stats.processing > 0 && stats.currentlyProcessing) {
+        const processingTime = Date.now() - new Date(stats.currentlyProcessing.startTime || 0).getTime();
+        if (processingTime > 5 * 60 * 1000) { // 5 minutes
+          log(`⚠️ Queue item stuck processing for ${Math.round(processingTime/60000)} minutes: ${stats.currentlyProcessing.url}`, 'warn');
+        }
+      }
+
+    } catch (error) {
+      log(`Queue monitoring error: ${error.message}`, 'error');
+    }
+  }, 1000); // Check every second during monitoring
+}
+
+function stopQueueMonitoring() {
+  if (queueMonitorInterval) {
+    clearInterval(queueMonitorInterval);
+    queueMonitorInterval = null;
+    log('🔍 Stopped queue monitoring', 'info');
+  }
+}
+
+// Test LISTEN/NOTIFY functionality
+async function testQueueNotifications() {
+  log('🧪 Testing queue LISTEN/NOTIFY functionality...', 'info');
+
+  try {
+    // Add a test item and monitor for immediate processing
+    startQueueMonitoring();
+
+    await addTestQueueItem();
+
+    // Check if processing started within 2 seconds (should be immediate with LISTEN/NOTIFY)
+    setTimeout(async () => {
+      const statsResponse = await chrome.runtime.sendMessage({
+        type: 'get-summary-queue-stats'
+      });
+
+      if (statsResponse.stats.processing > 0 || statsResponse.stats.completed > 0) {
+        log('✅ LISTEN/NOTIFY working - processing started immediately', 'info');
+      } else {
+        log('⚠️ LISTEN/NOTIFY may not be working - no immediate processing detected', 'warn');
+      }
+
+      stopQueueMonitoring();
+    }, 2000);
+
+  } catch (error) {
+    log(`❌ Queue notification test failed: ${error.message}`, 'error');
+    stopQueueMonitoring();
+  }
+}
+
+// Reset stuck items back to pending
+async function resetStuckItems() {
+  log('🔧 Resetting stuck processing items...', 'info');
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'execute-sql',
+      data: {
+        query: "UPDATE summarization_queue SET status = 'pending' WHERE status = 'processing' AND created_at < NOW() - INTERVAL '10 minutes';",
+        writeMode: true
+      }
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    const rowsUpdated = response.rowCount || 0;
+    log(`✅ Reset ${rowsUpdated} stuck items back to pending`, 'info');
+
+    // Refresh stats
+    handleRefreshQueueStats();
+
+  } catch (error) {
+    log(`❌ Failed to reset stuck items: ${error.message}`, 'error');
+  }
+}
+
+// Show queue processing timeline
+async function showQueueTimeline() {
+  log('📊 Generating queue processing timeline...', 'info');
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'execute-sql',
+      data: {
+        query: `
+          SELECT
+            url, title, status, attempts,
+            created_at, processed_at,
+            CASE
+              WHEN processed_at IS NOT NULL THEN
+                EXTRACT(EPOCH FROM (processed_at - created_at))
+              ELSE NULL
+            END as processing_time_seconds
+          FROM summarization_queue
+          ORDER BY created_at DESC
+          LIMIT 20;
+        `,
+        writeMode: false
+      }
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    displayQueryResults(response);
+    log('✅ Queue timeline generated successfully', 'info');
+
+  } catch (error) {
+    log(`❌ Failed to generate queue timeline: ${error.message}`, 'error');
+  }
+}
+
+// Handle cleanup of old queue items
+async function handleCleanupOldItems() {
+  log('🧹 Cleaning up old queue items...', 'info');
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'execute-sql',
+      data: {
+        query: "DELETE FROM summarization_queue WHERE status IN ('completed', 'failed') AND processed_at < NOW() - INTERVAL '7 days';",
+        writeMode: true
+      }
+    });
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    const rowsDeleted = response.rowCount || 0;
+    log(`✅ Cleaned up ${rowsDeleted} old queue items`, 'info');
+
+    // Refresh stats
+    handleRefreshQueueStats();
+
+  } catch (error) {
+    log(`❌ Failed to cleanup old items: ${error.message}`, 'error');
+  }
+}
+
+// Show sample queries focused on queue debugging
+function showQueueSampleQueries() {
+  const queueQueries = [
+    'SELECT status, COUNT(*) as count FROM summarization_queue GROUP BY status ORDER BY status;',
+    'SELECT id, url, title, domain, attempts, created_at FROM summarization_queue WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 10;',
+    'SELECT url, title, attempts, status, created_at, processed_at FROM summarization_queue WHERE status = \'failed\' ORDER BY created_at DESC LIMIT 10;',
+    'SELECT id, url, title, status, attempts, created_at FROM summarization_queue WHERE status = \'processing\' ORDER BY created_at ASC;',
+    'SELECT attempts, COUNT(*) as count FROM summarization_queue GROUP BY attempts ORDER BY attempts;'
+  ];
+
+  const menu = document.createElement('div');
+  menu.style.cssText = `
+    position: fixed;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    padding: 8px;
+    z-index: 1000;
+    max-height: 300px;
+    overflow-y: auto;
+    min-width: 400px;
+  `;
+
+  // Add title
+  const title = document.createElement('div');
+  title.style.cssText = `
+    padding: 8px 12px;
+    font-weight: 600;
+    border-bottom: 1px solid #e2e8f0;
+    margin-bottom: 4px;
+    color: #475569;
+  `;
+  title.textContent = 'Queue Debugging Queries';
+  menu.appendChild(title);
+
+  queueQueries.forEach(query => {
+    const item = document.createElement('div');
+    item.style.cssText = `
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 8px;
+      font-family: Monaco, monospace;
+      font-size: 12px;
+      margin: 2px 0;
+    `;
+    item.textContent = query;
+
+    item.addEventListener('mouseenter', () => {
+      item.style.background = '#f1f5f9';
+    });
+
+    item.addEventListener('mouseleave', () => {
+      item.style.background = 'transparent';
+    });
+
+    item.addEventListener('click', () => {
+      sqlQuery.value = query;
+      if (document.body.contains(menu)) {
+        document.body.removeChild(menu);
+      }
+      document.removeEventListener('click', closeMenu);
+    });
+
+    menu.appendChild(item);
+  });
+
+  // Position menu near the button
+  const rect = showQueueQueries.getBoundingClientRect();
+  menu.style.left = rect.left + 'px';
+  menu.style.top = (rect.bottom + 5) + 'px';
+
+  // Close menu when clicking outside
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target) && document.body.contains(menu)) {
+      document.body.removeChild(menu);
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+
+  setTimeout(() => {
+    document.addEventListener('click', closeMenu);
+  }, 0);
+
+  document.body.appendChild(menu);
+}
+
 // Auto-refresh queue stats periodically
 setInterval(() => {
   if (isConnected) {
@@ -1050,5 +1440,15 @@ window.debugPageController = {
   handleTestSearchModes,
   handleRefreshQueueStats,
   handleProcessQueue,
-  handleClearQueue
+  handleClearQueue,
+  // Queue debugging functions
+  addTestQueueItem,
+  addMultipleTestItems,
+  startQueueMonitoring,
+  stopQueueMonitoring,
+  testQueueNotifications,
+  resetStuckItems,
+  showQueueTimeline,
+  handleCleanupOldItems,
+  showQueueSampleQueries
 };

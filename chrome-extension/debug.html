@@ -392,6 +392,69 @@
         <button id="processQueue" class="button button-secondary">▶️ Process Queue</button>
         <button id="clearQueue" class="button button-danger">🗑️ Clear Queue</button>
       </div>
+
+      <!-- Queue Debugging Tools -->
+      <div style="margin-top: 16px;">
+        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #475569;">Queue Debugging Tools</h3>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+          <!-- Testing Tools -->
+          <div>
+            <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #64748b;">Testing</h4>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <button id="addTestItem" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                ➕ Add Test Item
+              </button>
+              <button id="addMultipleItems" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                📦 Add 5 Test Items
+              </button>
+              <button id="testNotifications" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                🧪 Test LISTEN/NOTIFY
+              </button>
+            </div>
+          </div>
+
+          <!-- Monitoring Tools -->
+          <div>
+            <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #64748b;">Monitoring</h4>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <button id="startMonitoring" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                🔍 Start Monitoring
+              </button>
+              <button id="stopMonitoring" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                ⏹️ Stop Monitoring
+              </button>
+              <button id="showTimeline" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                📊 Show Timeline
+              </button>
+            </div>
+          </div>
+
+          <!-- Maintenance Tools -->
+          <div>
+            <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #64748b;">Maintenance</h4>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <button id="resetStuckItems" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                🔧 Reset Stuck Items
+              </button>
+              <button id="cleanupOldItems" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                🧹 Cleanup Old Items
+              </button>
+              <button id="showQueueQueries" class="button button-secondary" style="width: 100%; font-size: 13px;">
+                📝 Queue SQL Queries
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style="background: #f8fafc; border-radius: 8px; padding: 12px; margin-top: 16px; font-size: 13px;">
+          <strong>💡 Debugging Tips:</strong><br>
+          • Use "Add Test Item" to verify LISTEN/NOTIFY triggers immediate processing<br>
+          • "Start Monitoring" provides real-time queue updates in logs<br>
+          • "Reset Stuck Items" fixes items stuck in processing state<br>
+          • Check the SQL samples for detailed queue inspection queries
+        </div>
+      </div>
     </div>
 
     <!-- Preferences -->

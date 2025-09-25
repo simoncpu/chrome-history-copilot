@@ -1238,6 +1238,17 @@ body::before {
 
 /* Relevance indicator removed - replaced with debug details */
 
+/* Badge details row - contains AI summary, source, and search mode badges */
+.badge-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
 /* Debug details row */
 .debug-details {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
@@ -1678,7 +1689,6 @@ body::before {
   font-weight: 600;
   font-family: 'Nunito', sans-serif;
   backdrop-filter: blur(8px);
-  text-transform: uppercase;
   letter-spacing: 0.3px;
 }
 

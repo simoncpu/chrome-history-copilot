@@ -591,29 +591,9 @@ function createResultElement(result) {
     snippet.textContent = result.summary || result.snippet || 'No description available';
   }
 
-  // Metadata container
+  // Metadata container - now only contains visit-related info
   const metadata = document.createElement('div');
   metadata.className = 'result-metadata';
-
-  // AI Summary indicator badge (for entries with AI summaries)
-  if (result.hasAiSummary || (result.source === 'pglite' && (result.summary || result.content_text))) {
-    const aiSummaryBadge = document.createElement('span');
-    aiSummaryBadge.className = 'ai-summary-badge';
-    aiSummaryBadge.innerHTML = '🤖 AI Summary';
-    metadata.appendChild(aiSummaryBadge);
-  }
-
-  // Source indicator (for debugging/transparency)
-  if (result.source) {
-    const sourceBadge = document.createElement('span');
-    sourceBadge.className = `source-badge source-${result.source}`;
-    sourceBadge.textContent = result.source === 'pglite' ? 'Indexed' : 'Browser';
-    metadata.appendChild(sourceBadge);
-  }
-
-  // Search mode badge (moved from header)
-  const modeBadge = createSearchModeBadge(getSelectedSearchMode());
-  metadata.appendChild(modeBadge);
 
   // Visit count pill (if available)
   if (result.visit_count && result.visit_count > 1) {
@@ -638,6 +618,12 @@ function createResultElement(result) {
   details.appendChild(snippet);
   if (metadata.children.length > 0) {
     details.appendChild(metadata);
+  }
+
+  // Add badge details row if enabled
+  const badgeDetails = createBadgeDetailsRow(result);
+  if (badgeDetails) {
+    details.appendChild(badgeDetails);
   }
 
   // Add debug details row if enabled
@@ -727,8 +713,43 @@ function createDebugDetailsRow(result) {
     return null;
   }
 
-  debugRow.textContent = `[DEBUG] ${details.join(' | ')}`;
+  debugRow.textContent = details.join(' | ');
   return debugRow;
+}
+
+// Create badge details row showing AI summary, source, and search mode badges
+function createBadgeDetailsRow(result) {
+  // Only show if debug details are enabled in preferences
+  if (!window.showDebugDetails) {
+    return null;
+  }
+
+  const badgeRow = document.createElement('div');
+  badgeRow.className = 'badge-details';
+
+  // AI Summary indicator badge (for entries with AI summaries)
+  if (result.hasAiSummary || (result.source === 'pglite' && (result.summary || result.content_text))) {
+    const aiSummaryBadge = document.createElement('span');
+    aiSummaryBadge.className = 'ai-summary-badge';
+    aiSummaryBadge.innerHTML = '🤖 AI Summary';
+    badgeRow.appendChild(aiSummaryBadge);
+  }
+
+  // Source indicator with emoji and normal capitalization
+  if (result.source) {
+    const sourceBadge = document.createElement('span');
+    sourceBadge.className = `source-badge source-${result.source}`;
+    const emoji = result.source === 'pglite' ? '📁' : '🌐';
+    const text = result.source === 'pglite' ? 'Indexed' : 'Browser';
+    sourceBadge.innerHTML = `${emoji} ${text}`;
+    badgeRow.appendChild(sourceBadge);
+  }
+
+  // Search mode badge
+  const modeBadge = createSearchModeBadge(getSelectedSearchMode());
+  badgeRow.appendChild(modeBadge);
+
+  return badgeRow;
 }
 
 function createSearchModeBadge(mode) {

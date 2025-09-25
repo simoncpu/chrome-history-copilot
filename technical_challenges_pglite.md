@@ -296,6 +296,14 @@ async function euclideanDistanceSearch(db, queryEmbedding, limit = 25) {
 
 ## Full-Text Search with PostgreSQL
 
+**Important Note**: This implementation uses PostgreSQL's `ts_rank()` function, which is a TF-IDF-like algorithm, **NOT BM25**. While BM25 is often considered superior for text search, PostgreSQL doesn't have native BM25 support. The `ts_rank()` function provides effective text relevance scoring based on term frequency and document length normalization.
+
+**ts_rank vs BM25**:
+- **ts_rank**: PostgreSQL's built-in TF-IDF variant with document length normalization
+- **BM25**: More sophisticated algorithm with tunable parameters (k1, b) for term saturation
+- **Performance**: ts_rank is well-optimized in PostgreSQL and provides good results for most use cases
+- **Alternative**: ParadeDB's pg_bm25 extension would provide true BM25, but it's not available for PGlite/WASM environments
+
 ```javascript
 async function fullTextSearch(db, query, limit = 25) {
   // Escape special characters and prepare query
@@ -385,30 +393,59 @@ async function hybridSearch(db, query, queryEmbedding, mode = 'hybrid-rerank', l
 }
 
 async function rerankCandidates(db, candidates, query, limit) {
-  // Normalize scores
-  const maxTextRank = Math.max(...candidates.map(c => c.textRRF || 0));
-  const maxSimilarity = Math.max(...candidates.map(c => c.similarity || 0));
+  // This function uses min-max normalization and weighted scoring
+  // Text scores come from PostgreSQL's ts_rank (NOT BM25)
 
-  // Calculate hybrid scores with recency and popularity boosts
   const now = Date.now();
-  const reranked = candidates.map(candidate => {
-    // Normalize text and vector scores to [0, 1]
-    const textScore = maxTextRank > 0 ? (candidate.textRRF || 0) / maxTextRank : 0;
-    const vectorScore = maxSimilarity > 0 ? (candidate.similarity || 0) / maxSimilarity : 0;
 
-    // Recency boost (decay over 30 days)
+  // Build lookup maps for vector distances and text rank scores
+  const textResults = await fullTextSearch(db, query, 300);
+  const vectorResults = await vectorSearch(db, queryEmbedding, 300);
+
+  const textRankMap = new Map();
+  const vecDistMap = new Map();
+
+  textResults.forEach(d => {
+    if (d.id != null && typeof d.rank === 'number')
+      textRankMap.set(d.id, d.rank);
+  });
+  vectorResults.forEach(d => {
+    if (d.id != null && typeof d.distance === 'number')
+      vecDistMap.set(d.id, d.distance);
+  });
+
+  // Normalize scores using min-max normalization
+  const textRankVals = Array.from(textRankMap.values());
+  const vecVals = Array.from(vecDistMap.values());
+
+  const normalizeTextRank = createNormalizer(textRankVals, false); // higher is better
+  const normalizeVector = createNormalizer(vecVals, true); // smaller distance is better
+
+  // Scoring weights: semantic (50%), text relevance (30%), recency (10%), popularity (10%)
+  const wVec = 0.5, wTextRank = 0.3, wRec = 0.1, wVis = 0.1;
+
+  const reranked = candidates.map(candidate => {
+    // Get normalized scores
+    const vectorScore = normalizeVector(vecDistMap.get(candidate.id) || 1.0);
+    const textScore = normalizeTextRank(textRankMap.get(candidate.id) || 0);
+
+    // Recency boost (exponential decay over 30 days)
     const daysSinceVisit = (now - candidate.last_visit_at) / (1000 * 60 * 60 * 24);
     const recencyBoost = Math.exp(-daysSinceVisit / 30);
 
-    // Popularity boost (logarithmic)
-    const popularityBoost = Math.log(candidate.visit_count + 1) / Math.log(100);
+    // Popularity boost (logarithmic scale)
+    const maxVisits = Math.max(1, ...candidates.map(c => c.visit_count || 0));
+    const popularityBoost = Math.log(candidate.visit_count + 1) / Math.log(maxVisits + 1);
 
-    // Weighted combination
-    const finalScore =
-      0.3 * textScore +
-      0.5 * vectorScore +
-      0.1 * recencyBoost +
-      0.1 * popularityBoost;
+    // Additional boost factors
+    const titleBoost = candidate.title?.toLowerCase().includes(query.toLowerCase()) ? 0.15 : 0;
+    const domainBoost = candidate.domain?.toLowerCase().includes(query.toLowerCase()) ? 0.1 : 0;
+    const urlBoost = candidate.url?.toLowerCase().includes(query.toLowerCase()) ? 0.08 : 0;
+
+    // Final weighted score
+    const finalScore = (wVec * vectorScore) + (wTextRank * textScore) +
+                      (wRec * recencyBoost) + (wVis * popularityBoost) +
+                      titleBoost + domainBoost + urlBoost;
 
     return {
       ...candidate,

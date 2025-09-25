@@ -528,7 +528,7 @@ class DatabaseWrapper {
         SELECT
           id, url, domain, title, content_text, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
-          ts_rank(content_tsvector, query) AS bm25_score,
+          ts_rank(content_tsvector, query) AS text_rank_score,
           ts_rank(content_tsvector, query) AS score,
           ts_headline('english', content_text, query, 'MaxWords=32, MinWords=1, StartSel=<mark>, StopSel=</mark>') AS snippet
         FROM pages,
@@ -543,7 +543,7 @@ class DatabaseWrapper {
           AND url NOT LIKE 'data:%'
           AND url NOT LIKE 'blob:%'
           AND url NOT LIKE 'javascript:%'
-        ORDER BY bm25_score DESC, last_visit_at DESC
+        ORDER BY text_rank_score DESC, last_visit_at DESC
         LIMIT $2 OFFSET $3
       `, [query, limit, offset]);
 
@@ -556,7 +556,7 @@ class DatabaseWrapper {
           SELECT
             id, url, domain, title, content_text, summary, favicon_url,
             first_visit_at, last_visit_at, visit_count,
-            0.5 AS bm25_score,
+            0.5 AS text_rank_score,
             content_text AS snippet
           FROM pages
           WHERE (title ILIKE $1 OR content_text ILIKE $1)
@@ -670,19 +670,19 @@ class DatabaseWrapper {
   }
 
   rerankCandidates(candidates, query, textResults, vectorResults, needCount) {
-    // Normalized weighted hybrid: cosine (via distance), BM25, recency, visits
+    // Normalized weighted hybrid: cosine (via distance), ts_rank text score, recency, visits
     const now = Date.now();
 
     // Build maps for quick lookup
     const vecDistMap = new Map();
-    const bm25Map = new Map();
+    const textRankMap = new Map();
     const visitVals = [];
 
     vectorResults.forEach(d => { if (d.id != null && typeof d.distance === 'number') vecDistMap.set(d.id, d.distance); });
-    textResults.forEach(d => { if (d.id != null && typeof d.bm25_score === 'number') bm25Map.set(d.id, d.bm25_score); });
+    textResults.forEach(d => { if (d.id != null && typeof d.text_rank_score === 'number') textRankMap.set(d.id, d.text_rank_score); });
 
     const vecVals = Array.from(vecDistMap.values());
-    const bmVals = Array.from(bm25Map.values());
+    const textRankVals = Array.from(textRankMap.values());
 
     const mkNorm = (vals, smallerIsBetter) => {
       if (!vals.length) return { norm: () => 0 };
@@ -698,21 +698,21 @@ class DatabaseWrapper {
     };
 
     const vecN = mkNorm(vecVals, true);
-    const bmN = mkNorm(bmVals, false);
+    const textRankN = mkNorm(textRankVals, false);
 
     candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
     const maxVisits = Math.max(1, ...visitVals);
 
     // Scoring weights: balanced between semantic and textual relevance
-    const wVec = 0.5, wBm25 = 0.3, wRec = 0.1, wVis = 0.1;
+    const wVec = 0.5, wTextRank = 0.3, wRec = 0.1, wVis = 0.1;
     // Additional boosts: title=0.15, domain=0.1, url=0.08
 
     const scored = candidates.map(doc => {
       const vDist = vecDistMap.get(doc.id);
       const vScore = (typeof vDist === 'number') ? vecN.norm(vDist) : 0;
 
-      const bm = bm25Map.get(doc.id);
-      const tScore = (typeof bm === 'number') ? bmN.norm(bm) : 0;
+      const textRank = textRankMap.get(doc.id);
+      const tScore = (typeof textRank === 'number') ? textRankN.norm(textRank) : 0;
 
       const days = (now - (doc.last_visit_at || now)) / (1000 * 60 * 60 * 24);
       const rec = Math.exp(-days / 30);
@@ -724,7 +724,7 @@ class DatabaseWrapper {
       const domainBoost = doc.domain && String(doc.domain).toLowerCase().includes(String(query).toLowerCase()) ? 0.1 : 0;
       const urlBoost = doc.url && String(doc.url).toLowerCase().includes(String(query).toLowerCase()) ? 0.08 : 0;
 
-      const base = (wVec * vScore) + (wBm25 * tScore) + (wRec * rec) + (wVis * vis) + titleBoost + domainBoost + urlBoost;
+      const base = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis) + titleBoost + domainBoost + urlBoost;
       const finalScore = base > 0 ? base : (doc.rrfScore || 0);
 
       return {

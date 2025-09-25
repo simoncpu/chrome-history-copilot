@@ -675,8 +675,8 @@ function createDebugDetailsRow(result) {
   if (result.similarity !== undefined && result.similarity !== null) {
     details.push(`sim: ${formatScore(result.similarity)}`);
   }
-  if (result.bm25_score !== undefined && result.bm25_score !== null) {
-    details.push(`bm25: ${formatScore(result.bm25_score)}`);
+  if (result.text_rank_score !== undefined && result.text_rank_score !== null) {
+    details.push(`ts_rank: ${formatScore(result.text_rank_score)}`);
   }
 
   // Component scores

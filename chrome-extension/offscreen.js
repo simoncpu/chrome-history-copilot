@@ -728,14 +728,40 @@ class DatabaseWrapper {
     const vecVals = Array.from(vecDistMap.values());
     const textRankVals = Array.from(textRankMap.values());
 
+    // Helper to get percentile value from array
+    const getPercentile = (arr, p) => {
+      if (!arr.length) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const idx = Math.max(0, Math.ceil(p * sorted.length) - 1);
+      return sorted[idx];
+    };
+
+    // Create normalizer using percentile-based scaling with min/max fallback
     const mkNorm = (vals, smallerIsBetter) => {
       if (!vals.length) return { norm: () => 0 };
-      const min = Math.min(...vals);
-      const max = Math.max(...vals);
-      const range = Math.max(1e-9, max - min);
+
+      // Try percentile normalization first
+      const p5 = getPercentile(vals, 0.05);
+      const p95 = getPercentile(vals, 0.95);
+      let range = p95 - p5;
+
+      // Fallback to min/max if percentiles are too close
+      let usePercentile = range > 1e-9;
+      if (!usePercentile) {
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        range = Math.max(1e-9, max - min);
+        return {
+          norm: (v) => {
+            const x = (v - min) / range; // 0..1
+            return smallerIsBetter ? 1 - x : x;
+          }
+        };
+      }
+
       return {
         norm: (v) => {
-          const x = (v - min) / range; // 0..1
+          const x = Math.max(0, Math.min(1, (v - p5) / range)); // clamp to [0,1]
           return smallerIsBetter ? 1 - x : x;
         }
       };
@@ -747,8 +773,8 @@ class DatabaseWrapper {
     candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
     const maxVisits = Math.max(1, ...visitVals);
 
-    // Scoring weights: balanced between semantic and textual relevance
-    const wVec = 0.5, wTextRank = 0.3, wRec = 0.1, wVis = 0.1;
+    // Scoring weights: optimized for personal browsing history
+    const wVec = 0.3, wTextRank = 0.4, wRec = 0.2, wVis = 0.1;
     // Additional boosts: title=0.15, domain=0.1, url=0.08
 
     const scored = candidates.map(doc => {
@@ -759,7 +785,7 @@ class DatabaseWrapper {
       const tScore = (typeof textRank === 'number') ? textRankN.norm(textRank) : 0;
 
       const days = (now - (doc.last_visit_at || now)) / (1000 * 60 * 60 * 24);
-      const rec = Math.exp(-days / 30);
+      const rec = Math.exp(-Math.log(2) * days / 14);
 
       const vc = Number(doc.visit_count) || 0;
       const vis = Math.log(vc + 1) / Math.log(maxVisits + 1);
@@ -768,8 +794,9 @@ class DatabaseWrapper {
       const domainBoost = doc.domain && String(doc.domain).toLowerCase().includes(String(query).toLowerCase()) ? 0.1 : 0;
       const urlBoost = doc.url && String(doc.url).toLowerCase().includes(String(query).toLowerCase()) ? 0.08 : 0;
 
-      const base = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis) + titleBoost + domainBoost + urlBoost;
-      const finalScore = base > 0 ? base : (doc.rrfScore || 0);
+      const boosts = Math.min(titleBoost + domainBoost + urlBoost, 0.25);
+      const base = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis) + boosts;
+      const finalScore = base > 0 ? (0.95 * base + 0.05 * (doc.rrfScore || 0)) : (doc.rrfScore || 0);
 
       return {
         ...doc,

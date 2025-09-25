@@ -572,8 +572,8 @@ class DatabaseWrapper {
         SELECT
           id, url, domain, title, content_text, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
-          ts_rank(content_tsvector, query) AS text_rank_score,
-          ts_rank(content_tsvector, query) AS score,
+          ts_rank_cd(content_tsvector, query) AS text_rank_score,
+          ts_rank_cd(content_tsvector, query) AS score,
           ts_headline('english', content_text, query, 'MaxWords=32, MinWords=1, StartSel=<mark>, StopSel=</mark>') AS snippet
         FROM pages,
              plainto_tsquery('english', $1) AS query

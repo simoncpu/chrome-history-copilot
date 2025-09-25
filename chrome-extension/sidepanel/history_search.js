@@ -19,7 +19,6 @@ let toggleRemoteWarm;
 let toggleDebugDetails;
 let modelStatusEl;
 let processingStatus;
-let processingDetails;
 
 // State
 let currentQuery = '';
@@ -59,7 +58,6 @@ function initializeSearchPage() {
   toggleDebugDetails = document.getElementById('toggleDebugDetails');
   modelStatusEl = document.getElementById('modelStatus');
   processingStatus = document.getElementById('processingStatus');
-  processingDetails = document.getElementById('processingDetails');
 
   if (!searchInput) {
     console.error('[SEARCH] Required DOM elements not found');
@@ -587,7 +585,7 @@ function createResultElement(result) {
 
   // Handle different result sources and show appropriate content
   if (result.source === 'browser' && !result.hasAiSummary) {
-    snippet.textContent = 'No AI summary available yet. Visit this page to generate one.';
+    snippet.textContent = 'No AI summary available yet.';
     snippet.classList.add('no-summary');
   } else {
     snippet.textContent = result.summary || result.snippet || 'No description available';
@@ -938,7 +936,7 @@ async function checkQueueStatus() {
       isProcessingPages = hasIngestionWork; // Only ingestion work triggers progress indicator
 
       if (isProcessingPages) {
-        showProcessingStatus(summaryStats, ingestionStats);
+        showProcessingStatus();
         if (shouldDisableInputDuringProcessing) {
           disableSearchInput();
         }
@@ -963,48 +961,8 @@ async function checkQueueStatus() {
   }
 }
 
-function showProcessingStatus(summaryStats, ingestionStats) {
-  if (!processingStatus || !processingDetails) return;
-
-  // Combine details from both queues
-  const ingestionQueued = ingestionStats.queueLength || 0;
-  const summaryQueued = summaryStats.queueLength || 0;
-  const summaryCompleted = summaryStats.completed || 0;
-  const summaryFailed = summaryStats.failed || 0;
-
-  let details = [];
-
-  // Show ingestion status first (extraction/indexing)
-  if (ingestionQueued > 0 || ingestionStats.isProcessing) {
-    if (ingestionStats.currentUrl) {
-      details.push(`Extracting content from page`);
-    } else if (ingestionQueued > 0) {
-      details.push(`Indexing: ${ingestionQueued} pages queued`);
-    }
-  }
-
-  // Show summary status second (AI processing)
-  if (summaryQueued > 0 || summaryStats.isProcessing) {
-    let summaryDetail = `${summaryQueued} queued`;
-    if (summaryCompleted > 0) summaryDetail += `, ${summaryCompleted} completed`;
-    if (summaryFailed > 0) summaryDetail += `, ${summaryFailed} failed`;
-    details.push(summaryDetail);
-  }
-
-  // Show currently processing item from either queue
-  const currentlyProcessing = summaryStats.currentlyProcessing ||
-    (ingestionStats.currentUrl ? { title: 'Page content extraction', url: ingestionStats.currentUrl } : null);
-
-  if (currentlyProcessing) {
-    const proc = currentlyProcessing;
-    processingDetails.innerHTML = `
-      <div><strong>${escapeHtml(proc.title || 'Page')}</strong></div>
-      <div>${details.join(' • ')}</div>
-    `;
-  } else {
-    processingDetails.textContent = details.join(' • ') || 'Processing...';
-  }
-
+function showProcessingStatus() {
+  if (!processingStatus) return;
   processingStatus.classList.remove('hidden');
 }
 
@@ -1135,10 +1093,7 @@ function handleStatusUpdate(eventType, data) {
       // Show progress immediately when navigation begins
       if (!isProcessingPages) {
         isProcessingPages = true;
-        showProcessingStatus(
-          { queueLength: 0, completed: 0, failed: 0 },
-          { queueLength: 1, currentUrl: data.url, isProcessing: true }
-        );
+        showProcessingStatus();
         if (shouldDisableInputDuringProcessing) {
           disableSearchInput();
         }
@@ -1149,10 +1104,7 @@ function handleStatusUpdate(eventType, data) {
       // Continue showing processing status when a page is queued
       if (!isProcessingPages) {
         isProcessingPages = true;
-        showProcessingStatus(
-          { queueLength: 0, completed: 0, failed: 0 },
-          { queueLength: data.queueLength, currentUrl: data.url, isProcessing: true }
-        );
+        showProcessingStatus();
         if (shouldDisableInputDuringProcessing) {
           disableSearchInput();
         }

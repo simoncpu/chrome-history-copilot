@@ -312,7 +312,7 @@ body::before {
   box-shadow: var(--shadow-soft);
   flex-shrink: 0;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .search-section::before {
@@ -327,6 +327,24 @@ body::before {
     radial-gradient(circle at 80% 20%, rgba(253, 215, 170, 0.03) 0%, transparent 50%);
   border-radius: 40px;
   z-index: -1;
+}
+
+.search-section::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(125, 211, 252, 0.3) 20%,
+    rgba(167, 139, 250, 0.3) 50%,
+    rgba(253, 215, 170, 0.3) 80%,
+    transparent 100%);
+  border-radius: 1px;
+  z-index: 10;
+  pointer-events: none;
 }
 
 .search-container {
@@ -414,113 +432,44 @@ body::before {
   stroke-width: 2;
 }
 
-/* Processing Status - Organic Flow Design */
+/* Processing Status - Horizontal Loading Bar */
 .processing-status {
-  margin-top: 16px;
-  padding: 16px 20px;
-  background: linear-gradient(135deg,
-    rgba(125, 211, 252, 0.08) 0%,
-    rgba(240, 249, 255, 0.12) 35%,
-    rgba(255, 247, 237, 0.08) 100%);
-  backdrop-filter: blur(15px);
-  border-radius: 28px;
-  border: 1.5px solid transparent;
-  background-clip: padding-box;
-  position: relative;
+  height: 3px;
+  width: 100%;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 2px;
   overflow: hidden;
-  animation: flowIn 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow:
-    0 8px 32px rgba(125, 211, 252, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  margin: 8px 0;
+  animation: fadeIn 0.3s ease-in-out;
 }
 
-.processing-status::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(135deg,
-    rgba(125, 211, 252, 0.15) 0%,
-    rgba(167, 139, 250, 0.08) 50%,
-    rgba(253, 215, 170, 0.12) 100%);
-  border-radius: 28px;
-  z-index: -1;
-}
-
-.processing-status::after {
-  content: '';
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    rgba(125, 211, 252, 0.03) 45deg,
-    transparent 90deg,
-    rgba(167, 139, 250, 0.02) 180deg,
-    transparent 270deg
-  );
-  animation: gentleRotate 8s linear infinite;
-  z-index: -1;
-}
-
-.processing-indicator {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.loading-bar {
+  height: 100%;
+  background: linear-gradient(90deg,
+    var(--primary-color) 0%,
+    rgba(125, 211, 252, 0.8) 50%,
+    var(--primary-color) 100%);
+  width: 30%;
+  border-radius: 2px;
   position: relative;
-  z-index: 1;
+  animation: indeterminateBar 1.5s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
 }
 
-.processing-spinner {
-  width: 24px;
-  height: 24px;
-  background: conic-gradient(
-    from 0deg,
-    rgba(125, 211, 252, 0.2) 0deg,
-    var(--primary-color) 90deg,
-    rgba(167, 139, 250, 0.6) 180deg,
-    rgba(253, 215, 170, 0.4) 270deg,
-    rgba(125, 211, 252, 0.2) 360deg
-  );
-  border-radius: 50%;
-  animation: organicSpin 2s ease-in-out infinite;
-  position: relative;
+@keyframes indeterminateBar {
+  0% {
+    transform: translateX(-100%);
+  }
+  60% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(333%);
+  }
 }
 
-.processing-spinner::before {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  right: 2px;
-  bottom: 2px;
-  background: var(--surface-elevated);
-  border-radius: 50%;
-}
-
-.processing-spinner::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 6px;
-  height: 6px;
-  background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.processing-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .processing-message {
@@ -1004,22 +953,6 @@ body::before {
   position: relative;
 }
 
-.results-list::before {
-  content: '';
-  position: absolute;
-  top: -10px;
-  left: 10%;
-  right: 10%;
-  height: 2px;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(125, 211, 252, 0.3) 20%,
-    rgba(167, 139, 250, 0.3) 50%,
-    rgba(253, 215, 170, 0.3) 80%,
-    transparent 100%);
-  border-radius: 1px;
-  z-index: 1;
-}
 
 .result-item {
   animation: organicFadeIn 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;

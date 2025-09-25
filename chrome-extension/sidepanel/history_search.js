@@ -16,6 +16,7 @@ let errorState;
 let resultsList;
 let loadMoreButton;
 let toggleRemoteWarm;
+let toggleDebugDetails;
 let modelStatusEl;
 let processingStatus;
 let processingDetails;
@@ -28,6 +29,9 @@ let isLoading = false;
 let hasMoreResults = false;
 let lastBatch = [];
 let isAutoLoading = false;
+
+// Initialize debug details preference
+window.showDebugDetails = false;
 
 // Feature flags
 let shouldDisableInputDuringProcessing = false;  // Default: don't disable inputs during processing
@@ -52,6 +56,7 @@ function initializeSearchPage() {
   resultsList = document.getElementById('resultsList');
   loadMoreButton = document.getElementById('loadMoreButton');
   toggleRemoteWarm = document.getElementById('toggleRemoteWarm');
+  toggleDebugDetails = document.getElementById('toggleDebugDetails');
   modelStatusEl = document.getElementById('modelStatus');
   processingStatus = document.getElementById('processingStatus');
   processingDetails = document.getElementById('processingDetails');
@@ -200,6 +205,22 @@ function setupEventListeners() {
         if (e.target.checked) startModelWarmWatcher();
       } catch (err) {
         console.warn('[SEARCH] Failed to update remote warm pref:', err);
+      }
+    });
+  }
+
+  // Debug details toggle
+  if (toggleDebugDetails) {
+    toggleDebugDetails.addEventListener('change', async (e) => {
+      try {
+        window.showDebugDetails = !!e.target.checked;
+        await chrome.storage.local.set({ showDebugDetails: window.showDebugDetails });
+        // Refresh current results to show/hide debug details
+        if (currentResults.length > 0) {
+          displayResults(currentResults, currentQuery, currentOffset > 0);
+        }
+      } catch (err) {
+        console.warn('[SEARCH] Failed to update debug details pref:', err);
       }
     });
   }
@@ -612,34 +633,19 @@ function createResultElement(result) {
     metadata.appendChild(lastVisit);
   }
 
-  // Relevance indicator (if score available)
-  if (result.score !== undefined) {
-    const relevanceIndicator = document.createElement('div');
-    relevanceIndicator.className = 'relevance-indicator';
-
-    const relevanceLabel = document.createElement('span');
-    relevanceLabel.textContent = 'Relevance:';
-
-    const relevanceBar = document.createElement('div');
-    relevanceBar.className = 'relevance-bar';
-
-    const relevanceFill = document.createElement('div');
-    relevanceFill.className = 'relevance-fill';
-    // Normalize score to 0-100% (assuming score is 0-1)
-    const scorePercent = Math.max(0, Math.min(100, (result.score || 0) * 100));
-    relevanceFill.style.width = `${scorePercent}%`;
-
-    relevanceBar.appendChild(relevanceFill);
-    relevanceIndicator.appendChild(relevanceLabel);
-    relevanceIndicator.appendChild(relevanceBar);
-    metadata.appendChild(relevanceIndicator);
-  }
+  // Relevance indicator removed - replaced with debug details when enabled
 
   // Assemble details elements
   details.appendChild(url);
   details.appendChild(snippet);
   if (metadata.children.length > 0) {
     details.appendChild(metadata);
+  }
+
+  // Add debug details row if enabled
+  const debugDetails = createDebugDetailsRow(result);
+  if (debugDetails) {
+    details.appendChild(debugDetails);
   }
 
   // Assemble the link
@@ -649,6 +655,82 @@ function createResultElement(result) {
   article.appendChild(link);
 
   return article;
+}
+
+// Create debug details row showing scoring information
+function createDebugDetailsRow(result) {
+  // Only show if debug details are enabled in preferences
+  if (!window.showDebugDetails) {
+    return null;
+  }
+
+  const debugRow = document.createElement('div');
+  debugRow.className = 'debug-details';
+
+  const details = [];
+
+  // Helper function to safely format numbers
+  const formatScore = (value, decimals = 4) => {
+    return (value != null && typeof value === 'number' && !isNaN(value))
+      ? value.toFixed(decimals)
+      : 'null';
+  };
+
+  // Main score
+  if (result.score !== undefined && result.score !== null) {
+    details.push(`score: ${formatScore(result.score)}`);
+  }
+
+  // Score breakdown
+  if (result.finalScore !== undefined && result.finalScore !== null) {
+    details.push(`final: ${formatScore(result.finalScore)}`);
+  }
+  if (result.rrfScore !== undefined && result.rrfScore !== null) {
+    details.push(`rrf: ${formatScore(result.rrfScore)}`);
+  }
+  if (result.similarity !== undefined && result.similarity !== null) {
+    details.push(`sim: ${formatScore(result.similarity)}`);
+  }
+  if (result.bm25_score !== undefined && result.bm25_score !== null) {
+    details.push(`bm25: ${formatScore(result.bm25_score)}`);
+  }
+
+  // Component scores
+  if (result.vScore !== undefined && result.vScore !== null) {
+    details.push(`vec: ${formatScore(result.vScore, 3)}`);
+  }
+  if (result.tScore !== undefined && result.tScore !== null) {
+    details.push(`txt: ${formatScore(result.tScore, 3)}`);
+  }
+  if (result.recency !== undefined && result.recency !== null) {
+    details.push(`rec: ${formatScore(result.recency, 3)}`);
+  }
+  if (result.visitsNorm !== undefined && result.visitsNorm !== null) {
+    details.push(`vis: ${formatScore(result.visitsNorm, 3)}`);
+  }
+
+  // Boost scores
+  if (result.titleBoost && result.titleBoost > 0) {
+    details.push(`title+${formatScore(result.titleBoost, 2)}`);
+  }
+  if (result.domainBoost && result.domainBoost > 0) {
+    details.push(`domain+${formatScore(result.domainBoost, 2)}`);
+  }
+  if (result.urlBoost && result.urlBoost > 0) {
+    details.push(`url+${formatScore(result.urlBoost, 2)}`);
+  }
+
+  // Source information
+  if (result.source) {
+    details.push(`src: ${result.source}`);
+  }
+
+  if (details.length === 0) {
+    return null;
+  }
+
+  debugRow.textContent = `[DEBUG] ${details.join(' | ')}`;
+  return debugRow;
 }
 
 function createSearchModeBadge(mode) {
@@ -721,7 +803,7 @@ function getFaviconUrl(url, domain) {
 // User preferences
 async function loadUserPreferences() {
   try {
-    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs', 'lastSearchQuery']);
+    const result = await chrome.storage.local.get(['searchMode', 'lastSidePanelPage', 'aiPrefs', 'lastSearchQuery', 'showDebugDetails']);
 
     if (result.searchMode) {
       setSelectedSearchMode(result.searchMode);
@@ -734,6 +816,12 @@ async function loadUserPreferences() {
 
     // Load input disabling preference (default: false - don't disable)
     shouldDisableInputDuringProcessing = !!(result.aiPrefs?.disableInputDuringProcessing);
+
+    // Load debug details preference
+    window.showDebugDetails = !!result.showDebugDetails;
+    if (toggleDebugDetails) {
+      toggleDebugDetails.checked = window.showDebugDetails;
+    }
 
     // Return the last search query for auto-execution
     return result.lastSearchQuery || null;

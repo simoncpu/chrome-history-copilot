@@ -406,7 +406,9 @@ class DatabaseWrapper {
       BEGIN
         NEW.content_tsvector :=
           setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
-          setweight(to_tsvector('english', COALESCE(NEW.content_text, '')), 'B');
+          setweight(to_tsvector('english', COALESCE(NEW.domain, '')), 'A') ||
+          setweight(to_tsvector('english', COALESCE(NEW.url, '')), 'B') ||
+          setweight(to_tsvector('english', COALESCE(NEW.content_text, '')), 'C');
         NEW.updated_at := CURRENT_TIMESTAMP;
         RETURN NEW;
       END;
@@ -517,6 +519,7 @@ class DatabaseWrapper {
           id, url, domain, title, content_text, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
           ts_rank(content_tsvector, query) AS bm25_score,
+          ts_rank(content_tsvector, query) AS score,
           ts_headline('english', content_text, query, 'MaxWords=32, MinWords=1, StartSel=<mark>, StopSel=</mark>') AS snippet
         FROM pages,
              plainto_tsquery('english', $1) AS query
@@ -584,6 +587,7 @@ class DatabaseWrapper {
           id, url, domain, title, content_text, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
           1 - (embedding <=> $1::vector) AS similarity,
+          1 - (embedding <=> $1::vector) AS score,
           embedding <=> $1::vector AS distance
         FROM pages
         WHERE embedding IS NOT NULL
@@ -610,7 +614,7 @@ class DatabaseWrapper {
   async hybridSearch(query, queryEmbedding, limit, offset, mode) {
     // Get candidates from both search methods
     const needed = Math.min(offset + limit, 200);
-    const candidateSize = Math.min(needed * 4, 200);
+    const candidateSize = Math.min(needed * 6, 300); // Increased candidate pool for better recall
     const [textResults, vectorResults] = await Promise.all([
       this.textSearch(query, candidateSize, 0),
       this.vectorSearch(queryEmbedding, candidateSize, 0)
@@ -626,7 +630,7 @@ class DatabaseWrapper {
     }
   }
 
-  reciprocalRankFusion(textResults, vectorResults, limit, alpha = 0.6, k = 60) {
+  reciprocalRankFusion(textResults, vectorResults, limit, alpha = 0.4, k = 60) {
     const scores = new Map();
     const docMap = new Map();
 
@@ -650,7 +654,8 @@ class DatabaseWrapper {
       .slice(0, limit)
       .map(([id, rrfScore]) => ({
         ...docMap.get(id),
-        rrfScore
+        score: rrfScore, // Main score for UI display
+        rrfScore // Keep original for debug
       }));
   }
 
@@ -688,7 +693,9 @@ class DatabaseWrapper {
     candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
     const maxVisits = Math.max(1, ...visitVals);
 
+    // Scoring weights: balanced between semantic and textual relevance
     const wVec = 0.5, wBm25 = 0.3, wRec = 0.1, wVis = 0.1;
+    // Additional boosts: title=0.15, domain=0.1, url=0.08
 
     const scored = candidates.map(doc => {
       const vDist = vecDistMap.get(doc.id);
@@ -703,12 +710,25 @@ class DatabaseWrapper {
       const vc = Number(doc.visit_count) || 0;
       const vis = Math.log(vc + 1) / Math.log(maxVisits + 1);
 
-      const titleBoost = doc.title && String(doc.title).toLowerCase().includes(String(query).toLowerCase()) ? 0.05 : 0;
+      const titleBoost = doc.title && String(doc.title).toLowerCase().includes(String(query).toLowerCase()) ? 0.15 : 0;
+      const domainBoost = doc.domain && String(doc.domain).toLowerCase().includes(String(query).toLowerCase()) ? 0.1 : 0;
+      const urlBoost = doc.url && String(doc.url).toLowerCase().includes(String(query).toLowerCase()) ? 0.08 : 0;
 
-      const base = (wVec * vScore) + (wBm25 * tScore) + (wRec * rec) + (wVis * vis) + titleBoost;
+      const base = (wVec * vScore) + (wBm25 * tScore) + (wRec * rec) + (wVis * vis) + titleBoost + domainBoost + urlBoost;
       const finalScore = base > 0 ? base : (doc.rrfScore || 0);
 
-      return { ...doc, finalScore, vScore, tScore, recency: rec, visitsNorm: vis };
+      return {
+        ...doc,
+        score: finalScore, // Main score for UI display
+        finalScore, // Keep original for debug
+        vScore,
+        tScore,
+        recency: rec,
+        visitsNorm: vis,
+        titleBoost,
+        domainBoost,
+        urlBoost
+      };
     })
     .sort((a, b) => b.finalScore - a.finalScore)
     .slice(0, needCount);
@@ -829,7 +849,9 @@ async function ingestPage(pageInfo) {
     }
 
     // Generate embedding for content (always create one for sqlite-vec compatibility)
-    const textToEmbed = content.title + ' ' + content.text;
+    // Include title, domain, and content for better semantic matching
+    const domain = new URL(pageInfo.url).hostname;
+    const textToEmbed = content.title + ' ' + domain + ' ' + content.text;
     const embedding = textToEmbed.trim().length > 0 ? await embed(textToEmbed) : await embed('webpage');
 
     // Ensure summary is a string for vec0 metadata
@@ -841,7 +863,7 @@ async function ingestPage(pageInfo) {
       title: content.title,
       content_text: content.text,
       summary: summary,
-      domain: new URL(pageInfo.url).hostname,
+      domain: domain,
       first_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       last_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       visit_count: 1,
@@ -875,7 +897,9 @@ async function ingestCapturedContent(capturedData) {
     }
 
     // Generate embedding
-    const textToEmbed = (capturedData.title || '') + ' ' + (capturedData.text || '');
+    // Include title, domain, and content for better semantic matching
+    const domain = capturedData.domain || extractDomain(capturedData.url);
+    const textToEmbed = (capturedData.title || '') + ' ' + domain + ' ' + (capturedData.text || '');
     const embedding = await embed(textToEmbed);
 
     // Ensure summary is a string for vec0 metadata

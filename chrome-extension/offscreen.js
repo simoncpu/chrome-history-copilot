@@ -442,6 +442,16 @@ class DatabaseWrapper {
       return { id: null };
     }
 
+    // Check if this URL already exists to determine if it's a new page
+    let isNewPage = false;
+    try {
+      const existingPage = await this.db.query('SELECT id FROM pages WHERE url = $1 LIMIT 1', [pageData.url]);
+      isNewPage = existingPage.rows.length === 0;
+    } catch (error) {
+      console.warn('[DB] Failed to check existing page:', error);
+      isNewPage = true; // Assume new if check fails
+    }
+
     try {
       // Convert Float32Array to PostgreSQL array format
       const embeddingArray = `[${Array.from(pageData.embedding).join(',')}]`;
@@ -478,9 +488,9 @@ class DatabaseWrapper {
       ]);
 
       const insertedId = result.rows[0]?.id;
-      console.log(`[DB] Page upserted successfully with ID: ${insertedId}`);
+      console.log(`[DB] Page ${isNewPage ? 'inserted' : 'updated'} successfully with ID: ${insertedId}`);
 
-      return { id: insertedId };
+      return { id: insertedId, isNew: isNewPage };
     } catch (error) {
       console.error('[DB] Insert page failed:', error);
       throw error;
@@ -858,7 +868,7 @@ async function ingestPage(pageInfo) {
     if (summary == null) summary = '';
 
     // Store in database
-    const pageId = await db.insert('pages', {
+    const pageResult = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
       content_text: content.text,
@@ -870,7 +880,26 @@ async function ingestPage(pageInfo) {
       embedding: embedding
     });
 
-    return { status: 'success', pageId: pageId.id };
+    // Notify UI if this is a new page (not just an update)
+    if (pageResult.isNew) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'content_indexed',
+          data: {
+            url: pageInfo.url,
+            title: content.title,
+            domain: domain,
+            isNew: true,
+            timestamp: Date.now()
+          }
+        });
+        console.log(`[INGESTION] ✅ Notified UI of new content: ${pageInfo.url}`);
+      } catch (error) {
+        console.debug('[INGESTION] Failed to notify UI (normal if no listeners):', error.message);
+      }
+    }
+
+    return { status: 'success', pageId: pageResult.id };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest page:', error);
     return { error: error.message };
@@ -906,7 +935,7 @@ async function ingestCapturedContent(capturedData) {
     if (summary == null) summary = '';
 
     // Store in database
-    const pageId = await db.insert('pages', {
+    const pageResult = await db.insert('pages', {
       url: capturedData.url,
       title: capturedData.title,
       content_text: capturedData.text,
@@ -918,7 +947,27 @@ async function ingestCapturedContent(capturedData) {
       embedding: embedding
     });
 
-    return { status: 'success', pageId: pageId.id, source: 'captured' };
+    // Notify UI if this is a new page (including browser-only pages being indexed)
+    if (pageResult.isNew) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'content_indexed',
+          data: {
+            url: capturedData.url,
+            title: capturedData.title,
+            domain: capturedData.domain,
+            isNew: true,
+            timestamp: Date.now(),
+            source: 'captured'
+          }
+        });
+        console.log(`[INGESTION] ✅ Notified UI of captured content: ${capturedData.url}`);
+      } catch (error) {
+        console.debug('[INGESTION] Failed to notify UI (normal if no listeners):', error.message);
+      }
+    }
+
+    return { status: 'success', pageId: pageResult.id, source: 'captured' };
   } catch (error) {
     console.error('[OFFSCREEN] Failed to ingest captured content:', error);
     return { error: error.message };
@@ -1535,6 +1584,21 @@ async function processSummaryQueue() {
         if (updateResult && updateResult.success) {
           console.log(`[SUMMARIZATION] ✅ Successfully updated summary for: ${item.url}`);
           summaryQueueStats.completed++;
+
+          // Notify UI of summary completion for better user experience
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'content_summary_updated',
+              data: {
+                url: item.url,
+                title: item.data.title,
+                domain: item.data.domain,
+                timestamp: Date.now()
+              }
+            });
+          } catch (error) {
+            console.debug('[SUMMARIZATION] Failed to notify UI (normal if no listeners):', error.message);
+          }
         } else {
           console.warn(`[SUMMARIZATION] ⚠️ Failed to update database for: ${item.url}`, updateResult);
           summaryQueueStats.failed++;

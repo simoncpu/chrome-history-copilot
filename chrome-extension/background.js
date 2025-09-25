@@ -253,6 +253,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Async response
   }
 
+  // Forward content indexing notifications to UI sidepanels
+  if (message.type === 'content_indexed' || message.type === 'content_summary_updated') {
+    console.log(`[BG] Forwarding ${message.type} notification:`, message.data?.url);
+    // Broadcast to all sidepanel instances
+    chrome.runtime.sendMessage(message).catch(() => {
+      // Normal if no UI listeners are active
+    });
+    sendResponse({ status: 'forwarded' });
+    return;
+  }
+
   // Handle captured summary updates (from content script)
   if (message.type === 'capturedSummary') {
     (async () => {

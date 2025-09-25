@@ -1047,7 +1047,118 @@ function setupStatusUpdateListener() {
     if (message.type === 'status_update') {
       handleStatusUpdate(message.event, message.data);
     }
+
+    // Handle content indexing notifications
+    if (message.type === 'content_indexed') {
+      handleContentIndexed(message.data);
+    }
+
+    // Handle summary update notifications (optional refresh)
+    if (message.type === 'content_summary_updated') {
+      handleSummaryUpdated(message.data);
+    }
   });
+}
+
+// Handle new content being indexed
+function handleContentIndexed(data) {
+  console.log('[SEARCH] New content indexed:', data.url);
+
+  // Only refresh if we're currently showing results or browsing history
+  if (currentResults.length === 0 && !currentQuery) {
+    // We're in empty state - no need to refresh until user searches
+    return;
+  }
+
+  // Debounce multiple rapid indexing events
+  clearTimeout(window.contentIndexedTimeout);
+  window.contentIndexedTimeout = setTimeout(async () => {
+    try {
+      // Show subtle notification
+      showContentUpdateNotification(`New content indexed: ${data.title || extractDomainFromUrl(data.url)}`);
+
+      // Auto-refresh current results
+      if (currentQuery) {
+        // Re-run current search to include new content
+        console.log('[SEARCH] Refreshing search results to include new content');
+        await performSearch(currentQuery, 0, false); // Don't append, replace
+      } else {
+        // Re-load browsing history to include new content
+        console.log('[SEARCH] Refreshing browsing history to include new content');
+        await performSearch('', 0, false); // Empty query = browse all
+      }
+    } catch (error) {
+      console.error('[SEARCH] Failed to refresh after content indexing:', error);
+    }
+  }, 1000); // 1 second debounce
+}
+
+// Handle summary being updated for existing content
+function handleSummaryUpdated(data) {
+  console.log('[SEARCH] Summary updated for:', data.url);
+
+  // Find if this URL is in current results and update it
+  let updated = false;
+  currentResults.forEach(result => {
+    if (result.url === data.url) {
+      // Mark that we should refresh this result's display
+      result._summaryUpdated = true;
+      updated = true;
+    }
+  });
+
+  // If found in current results, show a subtle update
+  if (updated) {
+    showContentUpdateNotification(`Summary updated: ${data.title || extractDomainFromUrl(data.url)}`);
+  }
+}
+
+// Show subtle notification about content updates
+function showContentUpdateNotification(message) {
+  // Create or update notification element
+  let notification = document.getElementById('contentUpdateNotification');
+  if (!notification) {
+    notification = document.createElement('div');
+    notification.id = 'contentUpdateNotification';
+    notification.style.cssText = `
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(125, 211, 252, 0.9);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      max-width: 300px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    `;
+    document.body.appendChild(notification);
+  }
+
+  notification.textContent = message;
+  notification.style.opacity = '1';
+
+  // Hide after 3 seconds
+  setTimeout(() => {
+    notification.style.opacity = '0';
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.parentNode.removeChild(notification);
+      }
+    }, 300);
+  }, 3000);
+}
+
+// Helper function to extract domain from URL
+function extractDomainFromUrl(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 function handleStatusUpdate(eventType, data) {

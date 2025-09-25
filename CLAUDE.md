@@ -361,3 +361,4 @@ async function answerQuery(query) {
 - update @chrome-extension/debug.html to show sql queries or things that the chrome extension actually uses
 - Ignore folders that are named prototype_*/ unless explicitly referenced.
 - Some code might still contain assumption that was left when we still used sqlite-wasm and sqlite-vec. Do not use that assumption. New assumption is that we're now using pglite with pgvector.
+- Do not read the WASM pglite library when debugging because it's too large. Browse online documentation instead. Show that you require more information so that I can assist.

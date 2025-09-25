@@ -77,7 +77,10 @@ function initializeChatPage() {
 
   // Start monitoring summarization queue
   startQueueMonitoring();
-  
+
+  // Set up real-time status update listener
+  setupStatusUpdateListener();
+
 }
 
 // Note: Site access is optional; UI initializes regardless. The debug page
@@ -676,19 +679,28 @@ async function startQueueMonitoring() {
   await checkQueueStatus();
 
   // Set up periodic checking
-  queueStatusInterval = setInterval(checkQueueStatus, 5000); // Check every 5 seconds
+  queueStatusInterval = setInterval(checkQueueStatus, 2000); // Check every 2 seconds
 }
 
 async function checkQueueStatus() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'get-summary-queue-stats' });
+    // Get both ingestion and summarization queue stats
+    const [summaryResponse, ingestionResponse] = await Promise.all([
+      chrome.runtime.sendMessage({ type: 'get-summary-queue-stats' }),
+      chrome.runtime.sendMessage({ type: 'get-ingestion-stats' })
+    ]);
 
-    if (response && response.stats) {
-      const stats = response.stats;
-      isProcessingPages = stats.isProcessing || (stats.queueLength > 0);
+    if (summaryResponse?.stats || ingestionResponse) {
+      const summaryStats = summaryResponse?.stats || {};
+      const ingestionStats = ingestionResponse || {};
+
+      // Combine status: processing if either queue has work
+      const hasIngestionWork = ingestionStats.isProcessing || (ingestionStats.queueLength > 0);
+      const hasSummaryWork = summaryStats.isProcessing || (summaryStats.queueLength > 0);
+      isProcessingPages = hasIngestionWork || hasSummaryWork;
 
       if (isProcessingPages) {
-        showProcessingStatusChat(stats);
+        showProcessingStatusChat(summaryStats, ingestionStats);
         if (shouldDisableInputDuringProcessing) {
           disableChatInput();
         }
@@ -704,26 +716,46 @@ async function checkQueueStatus() {
   }
 }
 
-function showProcessingStatusChat(stats) {
+function showProcessingStatusChat(summaryStats, ingestionStats) {
   if (!processingStatusChat || !processingDetailsChat) return;
 
-  const queuedCount = stats.queueLength || 0;
-  const completedCount = stats.completed || 0;
-  const failedCount = stats.failed || 0;
+  // Combine details from both queues
+  const ingestionQueued = ingestionStats.queueLength || 0;
+  const summaryQueued = summaryStats.queueLength || 0;
+  const summaryCompleted = summaryStats.completed || 0;
+  const summaryFailed = summaryStats.failed || 0;
 
-  let details = `Queued: ${queuedCount}`;
-  if (completedCount > 0) details += `, Completed: ${completedCount}`;
-  if (failedCount > 0) details += `, Failed: ${failedCount}`;
+  let details = [];
 
-  // Show currently processing item if available
-  if (stats.currentlyProcessing) {
-    const proc = stats.currentlyProcessing;
+  // Show ingestion status first (extraction/indexing)
+  if (ingestionQueued > 0 || ingestionStats.isProcessing) {
+    if (ingestionStats.currentUrl) {
+      details.push(`Extracting content from page`);
+    } else if (ingestionQueued > 0) {
+      details.push(`Indexing: ${ingestionQueued} pages queued`);
+    }
+  }
+
+  // Show summary status second (AI processing)
+  if (summaryQueued > 0 || summaryStats.isProcessing) {
+    let summaryDetail = `AI Processing: ${summaryQueued} queued`;
+    if (summaryCompleted > 0) summaryDetail += `, ${summaryCompleted} completed`;
+    if (summaryFailed > 0) summaryDetail += `, ${summaryFailed} failed`;
+    details.push(summaryDetail);
+  }
+
+  // Show currently processing item from either queue
+  const currentlyProcessing = summaryStats.currentlyProcessing ||
+    (ingestionStats.currentUrl ? { title: 'Page content extraction', url: ingestionStats.currentUrl } : null);
+
+  if (currentlyProcessing) {
+    const proc = currentlyProcessing;
     processingDetailsChat.innerHTML = `
-      <div>Processing: <strong>${escapeHtmlChat(proc.title)}</strong></div>
-      <div>${details}</div>
+      <div>Processing: <strong>${escapeHtmlChat(proc.title || 'Page')}</strong></div>
+      <div>${details.join(' • ')}</div>
     `;
   } else {
-    processingDetailsChat.textContent = details;
+    processingDetailsChat.textContent = details.join(' • ') || 'Processing...';
   }
 
   processingStatusChat.classList.remove('hidden');
@@ -765,6 +797,48 @@ function escapeHtmlChat(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Real-time status update listener
+function setupStatusUpdateListener() {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'status_update') {
+      handleStatusUpdate(message.event, message.data);
+    }
+  });
+}
+
+function handleStatusUpdate(eventType, data) {
+  console.log(`[CHAT] Status update: ${eventType}`, data);
+
+  switch (eventType) {
+    case 'page_queued':
+      // Immediately show processing status when a page is queued
+      if (!isProcessingPages) {
+        isProcessingPages = true;
+        showProcessingStatusChat(
+          { queueLength: 0, completed: 0, failed: 0 },
+          { queueLength: data.queueLength, currentUrl: data.url, isProcessing: true }
+        );
+        if (shouldDisableInputDuringProcessing) {
+          disableChatInput();
+        }
+      }
+      break;
+
+    case 'processing_started':
+      // Update status to show processing has begun
+      isProcessingPages = true;
+      // Trigger immediate queue status check to get latest data
+      setTimeout(() => checkQueueStatus(), 100);
+      break;
+
+    case 'processing_completed':
+      // Processing completed, will be picked up by normal queue monitoring
+      // Trigger immediate queue status check
+      setTimeout(() => checkQueueStatus(), 100);
+      break;
+  }
 }
 
 // Cleanup on page unload

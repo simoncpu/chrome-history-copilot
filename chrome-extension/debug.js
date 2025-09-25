@@ -730,7 +730,7 @@ function startLogRefresh() {
       // Auto-refresh could fetch new logs from background if needed
       // For now, just ensure the display is updated
       updateLogDisplay();
-    }, 5000);
+    }, 2000);
   }
 }
 
@@ -1039,7 +1039,7 @@ setInterval(() => {
   if (isConnected) {
     handleRefreshQueueStats();
   }
-}, 10000); // Every 10 seconds
+}, 2000); // Every 2 seconds
 
 // Export for debugging
 window.debugPageController = {

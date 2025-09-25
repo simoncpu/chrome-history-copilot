@@ -282,6 +282,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ status: 'ok' });
       break;
 
+    case 'get-ingestion-stats':
+      sendResponse({
+        queueLength: ingestionQueue.length,
+        isProcessing: isProcessingQueue,
+        currentUrl: ingestionQueue[0]?.url || null,
+        recentlyProcessedCount: recentlyProcessed.size,
+        pendingTabUpdates: pendingTabUpdates.size,
+        performanceMetrics: performanceMetrics
+      });
+      break;
+
     default:
       console.warn('[BG] Unknown message type:', message.type);
       sendResponse({ error: 'Unknown message type' });
@@ -513,8 +524,8 @@ const ingestionQueue = [];
 let isProcessingQueue = false;
 const recentlyProcessed = new Set(); // Track recently processed URLs
 const pendingTabUpdates = new Map(); // Debounce tab updates
-const DEBOUNCE_DELAY = 1000; // 1 second debounce
-const PROCESSING_DELAY = 2000; // 2 seconds between processing items
+const DEBOUNCE_DELAY = 500; // 500ms debounce
+const PROCESSING_DELAY = 500; // 500ms between processing items
 const DUPLICATE_WINDOW = 30000; // 30 seconds duplicate prevention
 
 function isInternalUrl(url) {
@@ -592,6 +603,13 @@ async function queuePageForIngestion(pageInfo) {
     ingestionQueue.push(queueItem);
     console.log(`[BG] Queued page for ingestion: ${pageInfo.url} (queue size: ${ingestionQueue.length})`);
 
+    // Broadcast status update to active side panels
+    broadcastStatusUpdate('page_queued', {
+      url: pageInfo.url,
+      title: pageInfo.title,
+      queueLength: ingestionQueue.length
+    });
+
     // Start processing queue if not already running
     if (!isProcessingQueue) {
       processIngestionQueue();
@@ -610,6 +628,11 @@ async function processIngestionQueue() {
   const startTime = Date.now();
 
   console.log(`[BG] Starting queue processing with ${ingestionQueue.length} items`);
+
+  // Broadcast processing started
+  broadcastStatusUpdate('processing_started', {
+    queueLength: ingestionQueue.length
+  });
 
   try {
     await ensureOffscreenDocument();
@@ -690,6 +713,12 @@ async function processIngestionQueue() {
     isProcessingQueue = false;
     const totalTime = Date.now() - startTime;
     console.log(`[BG] Queue processing completed in ${totalTime}ms`);
+
+    // Broadcast processing completed
+    broadcastStatusUpdate('processing_completed', {
+      totalTime: totalTime,
+      queueLength: ingestionQueue.length
+    });
   }
 }
 
@@ -789,6 +818,31 @@ setInterval(() => {
     console.error('[BG] Cleanup error:', error);
   }
 }, 60000); // Run every minute
+
+// Status broadcasting to active side panels
+async function broadcastStatusUpdate(eventType, data) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const searchPanelUrl = chrome.runtime.getURL('sidepanel/history_search.html');
+    const chatPanelUrl = chrome.runtime.getURL('sidepanel/history_chat.html');
+
+    for (const tab of tabs) {
+      if (tab.url === searchPanelUrl || tab.url === chatPanelUrl) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'status_update',
+          event: eventType,
+          data: data
+        }, () => {
+          // Ignore errors - panel might not be ready to receive messages
+          void chrome.runtime.lastError;
+        });
+      }
+    }
+  } catch (error) {
+    // Ignore errors in status broadcasting - it's not critical
+    console.warn('[BG] Status broadcast failed:', error);
+  }
+}
 
 // Export performance metrics for debugging
 globalThis.getBackgroundMetrics = () => ({

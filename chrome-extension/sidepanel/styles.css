@@ -46,6 +46,15 @@
   padding: 0;
 }
 
+/* Prevent horizontal scrollbars globally */
+html, body {
+  overflow-x: hidden;
+}
+
+*, *::before, *::after {
+  max-width: 100%;
+}
+
 body {
   font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--background);
@@ -54,6 +63,7 @@ body {
   font-size: 14px;
   font-weight: 400;
   overflow: hidden;
+  overflow-x: hidden;
   position: relative;
 }
 
@@ -76,15 +86,18 @@ body::before {
   height: 100vh;
   max-width: 100%;
   overflow: hidden;
+  overflow-x: hidden;
 }
 
 /* Browser-style Tabs */
 .browser-tabs {
-  background: var(--background);
+  background: rgba(248, 252, 254, 0.98);
   padding: 0;
   position: sticky;
   top: 0;
   z-index: 10;
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
 }
 
 .tab-bar {
@@ -132,32 +145,21 @@ body::before {
   padding: 6px;
   width: 36px;
   height: 32px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(240, 249, 255, 0.6) 100%);
+  background: none;
   color: var(--text-secondary);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-bottom: none;
-  border-radius: 16px 16px 0 0;
+  border: none;
   cursor: pointer;
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   position: relative;
   margin-left: auto;
 }
 
 .tab-settings-btn:hover {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(240, 249, 255, 0.8) 100%);
   color: var(--primary-color);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(125, 211, 252, 0.15);
 }
 
 .tab-settings-btn.active {
-  background: linear-gradient(135deg, white 0%, rgba(240, 249, 255, 0.95) 100%);
   color: var(--primary-color);
-  border-color: rgba(125, 211, 252, 0.3);
-  box-shadow: 0 6px 20px rgba(125, 211, 252, 0.2), 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: translateY(-2px);
 }
 
 .settings-icon {
@@ -298,6 +300,7 @@ body::before {
 .content-scroll-wrapper {
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }

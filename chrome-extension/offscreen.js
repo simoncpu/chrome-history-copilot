@@ -890,7 +890,8 @@ async function ingestPage(pageInfo) {
             title: content.title,
             domain: domain,
             isNew: true,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            indexingComplete: true
           }
         });
         console.log(`[INGESTION] ✅ Notified UI of new content: ${pageInfo.url}`);
@@ -958,7 +959,8 @@ async function ingestCapturedContent(capturedData) {
             domain: capturedData.domain,
             isNew: true,
             timestamp: Date.now(),
-            source: 'captured'
+            source: 'captured',
+            indexingComplete: true
           }
         });
         console.log(`[INGESTION] ✅ Notified UI of captured content: ${capturedData.url}`);

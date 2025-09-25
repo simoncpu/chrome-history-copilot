@@ -933,10 +933,9 @@ async function checkQueueStatus() {
       const ingestionStats = ingestionResponse || {};
       const wasProcessing = isProcessingPages;
 
-      // Combine status: processing if either queue has work
+      // Only show progress for ingestion work, not summarization
       const hasIngestionWork = ingestionStats.isProcessing || (ingestionStats.queueLength > 0);
-      const hasSummaryWork = summaryStats.isProcessing || (summaryStats.queueLength > 0);
-      isProcessingPages = hasIngestionWork || hasSummaryWork;
+      isProcessingPages = hasIngestionWork; // Only ingestion work triggers progress indicator
 
       if (isProcessingPages) {
         showProcessingStatus(summaryStats, ingestionStats);
@@ -1064,6 +1063,16 @@ function setupStatusUpdateListener() {
 function handleContentIndexed(data) {
   console.log('[SEARCH] New content indexed:', data.url);
 
+  // Hide progress indicator when indexing is complete
+  if (data.indexingComplete && isProcessingPages) {
+    console.log('[SEARCH] Indexing complete, hiding progress indicator');
+    isProcessingPages = false;
+    hideProcessingStatus();
+    if (shouldDisableInputDuringProcessing) {
+      enableSearchInput();
+    }
+  }
+
   // Only refresh if we're currently showing results or browsing history
   if (currentResults.length === 0 && !currentQuery) {
     // We're in empty state - no need to refresh until user searches
@@ -1074,8 +1083,6 @@ function handleContentIndexed(data) {
   clearTimeout(window.contentIndexedTimeout);
   window.contentIndexedTimeout = setTimeout(async () => {
     try {
-      // Show subtle notification
-      showContentUpdateNotification(`New content indexed: ${data.title || extractDomainFromUrl(data.url)}`);
 
       // Auto-refresh current results
       if (currentQuery) {
@@ -1107,50 +1114,9 @@ function handleSummaryUpdated(data) {
     }
   });
 
-  // If found in current results, show a subtle update
-  if (updated) {
-    showContentUpdateNotification(`Summary updated: ${data.title || extractDomainFromUrl(data.url)}`);
-  }
+  // If found in current results, content will be refreshed automatically
 }
 
-// Show subtle notification about content updates
-function showContentUpdateNotification(message) {
-  // Create or update notification element
-  let notification = document.getElementById('contentUpdateNotification');
-  if (!notification) {
-    notification = document.createElement('div');
-    notification.id = 'contentUpdateNotification';
-    notification.style.cssText = `
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      background: rgba(125, 211, 252, 0.9);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      z-index: 1000;
-      opacity: 0;
-      transition: opacity 0.3s ease;
-      max-width: 300px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    `;
-    document.body.appendChild(notification);
-  }
-
-  notification.textContent = message;
-  notification.style.opacity = '1';
-
-  // Hide after 3 seconds
-  setTimeout(() => {
-    notification.style.opacity = '0';
-    setTimeout(() => {
-      if (notification.parentNode) {
-        notification.parentNode.removeChild(notification);
-      }
-    }, 300);
-  }, 3000);
-}
 
 // Helper function to extract domain from URL
 function extractDomainFromUrl(url) {
@@ -1165,8 +1131,22 @@ function handleStatusUpdate(eventType, data) {
   console.log(`[SEARCH] Status update: ${eventType}`, data);
 
   switch (eventType) {
+    case 'navigation_started':
+      // Show progress immediately when navigation begins
+      if (!isProcessingPages) {
+        isProcessingPages = true;
+        showProcessingStatus(
+          { queueLength: 0, completed: 0, failed: 0 },
+          { queueLength: 1, currentUrl: data.url, isProcessing: true }
+        );
+        if (shouldDisableInputDuringProcessing) {
+          disableSearchInput();
+        }
+      }
+      break;
+
     case 'page_queued':
-      // Immediately show processing status when a page is queued
+      // Continue showing processing status when a page is queued
       if (!isProcessingPages) {
         isProcessingPages = true;
         showProcessingStatus(

@@ -694,10 +694,9 @@ async function checkQueueStatus() {
       const summaryStats = summaryResponse?.stats || {};
       const ingestionStats = ingestionResponse || {};
 
-      // Combine status: processing if either queue has work
+      // Only show progress for ingestion work, not summarization
       const hasIngestionWork = ingestionStats.isProcessing || (ingestionStats.queueLength > 0);
-      const hasSummaryWork = summaryStats.isProcessing || (summaryStats.queueLength > 0);
-      isProcessingPages = hasIngestionWork || hasSummaryWork;
+      isProcessingPages = hasIngestionWork; // Only ingestion work triggers progress indicator
 
       if (isProcessingPages) {
         showProcessingStatusChat(summaryStats, ingestionStats);
@@ -805,15 +804,49 @@ function setupStatusUpdateListener() {
     if (message.type === 'status_update') {
       handleStatusUpdate(message.event, message.data);
     }
+
+    // Handle content indexing notifications
+    if (message.type === 'content_indexed') {
+      handleContentIndexed(message.data);
+    }
   });
+}
+
+// Handle new content being indexed
+function handleContentIndexed(data) {
+  console.log('[CHAT] New content indexed:', data.url);
+
+  // Hide progress indicator when indexing is complete
+  if (data.indexingComplete && isProcessingPages) {
+    console.log('[CHAT] Indexing complete, hiding progress indicator');
+    isProcessingPages = false;
+    hideProcessingStatusChat();
+    if (shouldDisableInputDuringProcessing) {
+      enableChatInput();
+    }
+  }
 }
 
 function handleStatusUpdate(eventType, data) {
   console.log(`[CHAT] Status update: ${eventType}`, data);
 
   switch (eventType) {
+    case 'navigation_started':
+      // Show progress immediately when navigation begins
+      if (!isProcessingPages) {
+        isProcessingPages = true;
+        showProcessingStatusChat(
+          { queueLength: 0, completed: 0, failed: 0 },
+          { queueLength: 1, currentUrl: data.url, isProcessing: true }
+        );
+        if (shouldDisableInputDuringProcessing) {
+          disableChatInput();
+        }
+      }
+      break;
+
     case 'page_queued':
-      // Immediately show processing status when a page is queued
+      // Continue showing processing status when a page is queued
       if (!isProcessingPages) {
         isProcessingPages = true;
         showProcessingStatusChat(

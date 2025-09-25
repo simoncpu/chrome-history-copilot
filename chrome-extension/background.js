@@ -409,6 +409,26 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, url, frameId }) => {
   }
 }, { url: [{ schemes: ['http', 'https'] }] });
 
+// Listen for navigation start to show progress immediately
+chrome.webNavigation.onCommitted.addListener(({ tabId, url, frameId }) => {
+  try {
+    if (frameId !== 0) return; // only top-level frames
+    if (!/^https?:\/\//.test(url)) return; // only http/https
+    if (isInternalUrl(url)) return; // skip internal URLs
+
+    // Broadcast navigation started immediately for progress indicator
+    broadcastStatusUpdate('navigation_started', {
+      url: url,
+      tabId: tabId,
+      timestamp: Date.now()
+    });
+
+    console.log(`[BG] Navigation started: ${url}`);
+  } catch (e) {
+    // Ignore errors in navigation handler
+  }
+}, { url: [{ schemes: ['http', 'https'] }] });
+
 // Content extraction using chrome.scripting API
 async function extractPageContent(url, sendResponse) {
   try {

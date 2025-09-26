@@ -2,6 +2,7 @@
  * AI History Chat - Chat Page Controller
  */
 import { aiBridge } from '../bridge/ai-bridge.js';
+import { keywordExtractor } from '../bridge/keyword-extractor.js';
 
 // DOM elements
 let chatMessages;
@@ -26,6 +27,7 @@ let chatHistory = [];
 let aiSession = null;
 let isProcessingPages = false;
 let queueStatusInterval = null;
+const CHAT_THREAD_ID = 'default';
 
 // Feature flags
 let shouldDisableInputDuringProcessing = false;  // Default: don't disable inputs during processing
@@ -252,9 +254,8 @@ function addUserMessage(message) {
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
 
-  // Add to history
-  chatHistory.push({ role: 'user', content: message, timestamp: Date.now() });
-  saveChatHistory();
+  // Save to PGlite database
+  saveChatMessage('user', message);
 }
 
 async function generateResponse(userMessage) {
@@ -263,33 +264,95 @@ async function generateResponse(userMessage) {
   isGenerating = true;
   updateUI();
 
+  // Show loading screen immediately - don't block browser
+  showChatLoading();
+  updateChatProgress('Initializing AI system...');
+
+  // TODO: Future enhancement - disable chat input during Chrome AI loading
+  // This would prevent users from submitting more messages while Chrome AI is still loading
+  // Implementation: Add a flag to disable the input field and submit button during loading
+
+  // Start Chrome AI loading in background (non-blocking)
+  processChatRequest(userMessage).catch(error => {
+    console.error('[CHAT] Failed to generate response:', error);
+    hideChatLoading();
+
+    // Provide specific error messages based on error type
+    let errorMessage = 'AI Error: ';
+    if (error.message.includes('not available') || error.message.includes('unavailable')) {
+      errorMessage += 'Chrome AI is not available. Please ensure you are using Chrome Canary with AI flags enabled.';
+    } else if (error.message.includes('quota') || error.message.includes('limit')) {
+      errorMessage += 'AI quota exceeded. Please wait a moment before trying again.';
+    } else if (error.message.includes('download')) {
+      errorMessage += 'AI model is downloading. Please wait for the download to complete and try again.';
+    } else {
+      errorMessage += `${error.message}. Please check your Chrome AI configuration.`;
+    }
+
+    addErrorMessage(errorMessage);
+  }).finally(() => {
+    isGenerating = false;
+    updateUI();
+  });
+}
+
+async function processChatRequest(userMessage) {
   try {
-    // Show loading indicator
-    showChatLoading();
+    // Step 1: Extract keywords using Chrome AI
+    console.log('[CHAT] Step 1: Extracting keywords from query:', userMessage);
+    updateChatProgress('Waiting for Chrome AI to load...');
+    const extractedKeywords = await keywordExtractor.extractKeywords(userMessage, updateChatProgress);
+    console.log('[CHAT] Step 1 complete: Keywords extracted:', extractedKeywords);
 
-    // First, search for relevant history items
-    const searchResults = await searchHistory(userMessage);
+    // Step 2: Search for relevant history items using keywords
+    console.log('[CHAT] Step 2: Searching history with keywords...');
+    updateChatProgress('Searching your browsing history...');
+    const searchResults = await searchHistoryWithKeywords(extractedKeywords, userMessage);
+    console.log('[CHAT] Step 2 complete: Found', searchResults?.length || 0, 'results');
 
-    // Generate AI response
-    const response = await generateAIResponse(userMessage, searchResults);
+    // Step 3: Generate AI response with context
+    console.log('[CHAT] Step 3: Generating AI response with', searchResults?.length || 0, 'context items...');
+    updateChatProgress('Generating AI response...');
+    const response = await generateAIResponse(userMessage, searchResults, updateChatProgress);
+    console.log('[CHAT] Step 3 complete: Response generated, length:', response?.length || 0, 'characters');
 
     // Hide loading and show response
     hideChatLoading();
     addAssistantMessage(response, searchResults);
 
   } catch (error) {
-    console.error('[CHAT] Failed to generate response:', error);
-    hideChatLoading();
-    addErrorMessage(`AI Error: ${error.message}. Please ensure Chrome AI is properly configured.`);
-  } finally {
-    isGenerating = false;
-    updateUI();
+    // Re-throw error to be handled by the main generateResponse function
+    throw error;
   }
 }
 
-async function searchHistory(query) {
-  
+async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'search',
+      data: {
+        query: originalQuery,
+        keywords: extractedKeywords,
+        mode: 'hybrid-rerank',
+        limit: 10
+      }
+    });
 
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    console.log('[CHAT] Search results:', response.results?.length || 0, 'pages found');
+    return response.results || [];
+  } catch (error) {
+    console.error('[CHAT] History search failed:', error);
+    return [];
+  }
+}
+
+// Legacy search function for compatibility
+async function searchHistory(query) {
   try {
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -312,8 +375,8 @@ async function searchHistory(query) {
   }
 }
 
-async function generateAIResponse(userMessage, searchResults) {
-  await aiBridge.initialize();
+async function generateAIResponse(userMessage, searchResults, onProgress = null) {
+  await aiBridge.initialize(onProgress);
 
   if (!aiBridge.isReady()) {
     throw new Error('Chrome AI is not available - ensure Chrome Canary with AI flags enabled');
@@ -324,22 +387,80 @@ async function generateAIResponse(userMessage, searchResults) {
 }
 
 async function generateWithChromeAI(userMessage, searchResults) {
-  // Ensure language session
-  if (!aiSession) {
-    aiSession = await aiBridge.createLanguageSession();
+  try {
+    console.log('[CHAT] generateWithChromeAI: Starting response generation...');
+
+    // Create session with initialPrompts containing recent chat history
+    if (!aiSession) {
+      console.log('[CHAT] generateWithChromeAI: Creating new AI session...');
+      const recentMessages = getRecentMessagesForSession(24); // Get up to 24 recent messages for context
+      console.log('[CHAT] generateWithChromeAI: Using', recentMessages.length, 'recent messages for context');
+
+      aiSession = await aiBridge.createLanguageSession({
+        initialPrompts: recentMessages
+      });
+      console.log('[CHAT] generateWithChromeAI: AI session created successfully');
+    } else {
+      console.log('[CHAT] generateWithChromeAI: Using existing AI session');
+    }
+
+    // Build search context for appending
+    console.log('[CHAT] generateWithChromeAI: Building search context with', searchResults?.length || 0, 'results...');
+    const searchContext = buildSearchContext(searchResults);
+    console.log('[CHAT] generateWithChromeAI: Search context built, length:', searchContext?.length || 0, 'characters');
+
+    // Use append() to add search context, then generate response
+    console.log('[CHAT] generateWithChromeAI: Calling aiBridge.generateResponse...');
+    const response = await aiBridge.generateResponse(userMessage, searchContext);
+    console.log('[CHAT] generateWithChromeAI: Response received, length:', response?.length || 0, 'characters');
+
+    return response;
+  } catch (error) {
+    console.error('[CHAT] generateWithChromeAI: Error during response generation:', error);
+    throw error;
   }
-
-  // Build context: search results + recent chat turns
-  const resultsContext = aiBridge.buildContext(searchResults, 8);
-  const turnsContext = buildChatTurnsContext(10, 2000);
-  const combinedContext = [resultsContext, turnsContext].filter(Boolean).join('\n\n');
-
-  // Generate response via bridge
-  const response = await aiBridge.generateResponse(userMessage, combinedContext);
-  return response;
 }
 
-function buildContext(searchResults) {
+function getRecentMessagesForSession(maxMessages = 24) {
+  // Return recent chat history in initialPrompts format
+  const messages = [];
+
+  // Add system prompt first
+  messages.push({
+    role: 'system',
+    content: `You are an AI assistant that helps users find information from their browsing history.
+
+Your responsibilities:
+1. Answer questions based ONLY on the provided browsing history snippets
+2. Always include clickable links when referencing specific pages
+3. Keep responses concise and helpful (2-4 sentences typically)
+4. If no relevant information is found, say so clearly
+5. Use markdown formatting for better readability
+
+Format guidelines:
+- Use **bold** for emphasis
+- Include links as [Page Title](URL)
+- Use bullet points for lists
+- Be direct and actionable
+
+Remember: You can only reference information from the provided browsing history context.`
+  });
+
+  // Add recent chat messages, limiting by maxMessages and rough token count
+  const recentHistory = chatHistory.slice(-maxMessages);
+  for (const msg of recentHistory) {
+    if (messages.length >= maxMessages) break;
+
+    messages.push({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    });
+  }
+
+  return messages;
+}
+
+function buildSearchContext(searchResults) {
   if (searchResults.length === 0) {
     return 'No relevant browsing history found.';
   }
@@ -407,14 +528,8 @@ function addAssistantMessage(content, searchResults = []) {
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
 
-  // Add to history
-  chatHistory.push({
-    role: 'assistant',
-    content: content,
-    searchResults: searchResults.slice(0, 5),
-    timestamp: Date.now()
-  });
-  saveChatHistory();
+  // Save to PGlite database
+  saveChatMessage('assistant', content);
 }
 
 function addErrorMessage(message) {
@@ -456,6 +571,26 @@ function showChatLoading() {
 
 function hideChatLoading() {
   chatLoading.classList.add('hidden');
+}
+
+function updateChatProgress(message) {
+  // Find or create progress text element
+  let progressText = document.getElementById('chatProgressText');
+  if (!progressText) {
+    progressText = document.createElement('div');
+    progressText.id = 'chatProgressText';
+    progressText.className = 'chat-progress-text';
+    progressText.style.cssText = 'font-size: 13px; color: #64748b; margin-top: 8px; text-align: center;';
+
+    // Insert after the typing indicator
+    const typingIndicator = chatLoading.querySelector('.typing-indicator');
+    if (typingIndicator && typingIndicator.parentNode) {
+      typingIndicator.parentNode.insertBefore(progressText, typingIndicator.nextSibling);
+    }
+  }
+
+  progressText.textContent = message;
+  scrollToBottom();
 }
 
 function showAIInitLoading(message = 'Initializing AI system...') {
@@ -661,23 +796,32 @@ function startModelWarmWatcherChat(timeoutMs = 120000) {
 // Chat history persistence
 async function loadChatHistory() {
   try {
-    const result = await chrome.storage.local.get(['chatHistory']);
-    if (result.chatHistory && Array.isArray(result.chatHistory)) {
-      chatHistory = result.chatHistory;
+    // Load chat messages from PGlite database
+    const response = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'get-chat-messages',
+      data: { threadId: CHAT_THREAD_ID, limit: 20 }
+    });
 
-      // Restore recent messages (last 10)
-      const recentHistory = chatHistory.slice(-10);
-      recentHistory.forEach(message => {
-        if (message.role === 'user') {
-          addUserMessageFromHistory(message.content);
-        } else if (message.role === 'assistant') {
-          addAssistantMessage(message.content, message.searchResults || []);
-        }
-      });
-
-      // Update storage preference
-      await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
+    if (response.error) {
+      console.error('[CHAT] Failed to load chat messages:', response.error);
+      return;
     }
+
+    const messages = response.messages || [];
+    chatHistory = messages;
+
+    // Restore messages in UI
+    messages.forEach(message => {
+      if (message.role === 'user') {
+        addUserMessageFromHistory(message.content);
+      } else if (message.role === 'assistant') {
+        addAssistantMessage(message.content, []);
+      }
+    });
+
+    // Update storage preference
+    await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
 
     // Ensure we start scrolled to bottom when opening chat
     scrollToBottom();
@@ -686,13 +830,31 @@ async function loadChatHistory() {
   }
 }
 
-async function saveChatHistory() {
+async function saveChatMessage(role, content) {
   try {
-    // Keep only recent history (last 50 messages) to avoid storage bloat
-    const recentHistory = chatHistory.slice(-50);
-    await chrome.storage.local.set({ chatHistory: recentHistory });
+    // Save message to PGlite database
+    const response = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'save-chat-message',
+      data: { threadId: CHAT_THREAD_ID, role, content }
+    });
+
+    if (response.error) {
+      console.error('[CHAT] Failed to save chat message:', response.error);
+      return;
+    }
+
+    // Update local history
+    chatHistory.push({
+      id: response.messageId,
+      role,
+      content,
+      timestamp: Date.now()
+    });
+
+    console.log('[CHAT] Message saved:', response.messageId);
   } catch (error) {
-    console.error('[CHAT] Failed to save chat history:', error);
+    console.error('[CHAT] Failed to save chat message:', error);
   }
 }
 
@@ -718,9 +880,19 @@ function addUserMessageFromHistory(content) {
 
 async function handleClearChat() {
   try {
-    // Clear state and storage
+    // Clear chat thread in PGlite database
+    const response = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'clear-chat-thread',
+      data: { threadId: CHAT_THREAD_ID }
+    });
+
+    if (response.error) {
+      console.error('[CHAT] Failed to clear chat thread:', response.error);
+    }
+
+    // Clear local state
     chatHistory = [];
-    await chrome.storage.local.set({ chatHistory: [] });
 
     // Remove all messages except the welcome message
     const children = Array.from(chatMessages.children);
@@ -729,6 +901,16 @@ async function handleClearChat() {
         chatMessages.removeChild(node);
       }
     });
+
+    // Reset AI session to start fresh
+    if (aiSession) {
+      try {
+        await aiBridge.cleanup();
+        aiSession = null;
+      } catch (error) {
+        console.warn('[CHAT] Failed to cleanup AI session:', error);
+      }
+    }
 
     // Reset UI state
     isGenerating = false;

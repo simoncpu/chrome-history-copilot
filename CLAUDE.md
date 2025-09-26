@@ -81,12 +81,37 @@ Bundled libraries are present under `chrome-extension/lib/` in this repo.
   - bridge/
     - db-bridge.js (request/response client used by UI)
     - ai-bridge.js (Prompt + Summarizer utilities)
+    - keyword-extractor.js (Chrome AI keyword extraction service)
 
 Re‑use and adapt working patterns/code as documented in:
 - technical_challenges_pglite.md (embedding, vector search with pgvector, PostgreSQL full-text search, hybrid + rerank, RRF)
 - technical_challenges_transformer.md (Transformers.js configuration and constraints)
 - technical_challenges_chrome_api.md (Chrome AI Prompt/Summarizer usage)
 - constitution.md (conventions and packaging)
+
+## Recent Implementation Updates (January 2025)
+
+### Chrome AI Integration Complete
+- **Full Chrome 138+ API Support**: Integrated `window.ai.languageModel` and `window.ai.summarizer` with proper session management, `initialPrompts`, and `append()` context injection
+- **No Fallbacks Strategy**: Extension requires Chrome AI availability; fails gracefully with clear error messages if APIs are unavailable
+- **Keyword Extraction Service**: New `keyword-extractor.js` uses Chrome AI with JSON Schema `responseConstraint` for structured query analysis
+- **Session Quota Tracking**: Implemented `inputUsage` vs `inputQuota` monitoring with automatic session recreation
+
+### Two-Stage Chat Search Flow
+- **Stage 1 - Keyword Extraction**: AI analyzes user queries to extract keywords, phrases, must_include, and must_exclude terms using structured JSON Schema constraints
+- **Stage 2 - Enhanced Search**: Uses extracted keywords for filtered vector similarity search with semantic boosting and browser history integration
+- **Context Composition**: Builds AI context using `initialPrompts` for priming and `append()` for dynamic search results injection
+
+### PGlite Chat Message Retention
+- **New Schema Tables**: Added `chat_thread` and `chat_message` tables with FIFO eviction triggers
+- **200-Message Limit**: Automatic pruning keeps newest 200 messages per thread using PostgreSQL triggers
+- **Session Continuity**: Recent messages (20 max) provide context for new AI sessions using `getRecentMessagesForSession()`
+
+### Enhanced Debug Interface
+- **Chrome AI Testing**: Comprehensive testing tools for Prompt API, Summarizer API, and keyword extraction
+- **Real-time Monitoring**: Live status indicators for Chrome AI availability and model download progress
+- **Performance Metrics**: Step-by-step timing analysis for keyword extraction and search pipeline
+- **Queue Management**: Advanced tools for testing and monitoring the AI summarization queue system
 
 
 ## Data Model and Schema
@@ -250,16 +275,43 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 ## Debug Page (debug.html)
 
-- DB Explorer:
-  - Run arbitrary SQL (read‑only by default, with a guarded "Write mode" toggle).
-  - Inspect table counts, index health, and recent ingestion queue.
-  - Buttons: Clear DB (drop and recreate tables), Clear Model Cache, Export DB, Import DB (optional).
-- **AI Summarization Queue Section**:
+- **Site Permissions Management**:
+  - Check current site access for content extraction
+  - Grant site permissions with one-click buttons
+  - Links to Chrome extension settings for global permissions
+  - Troubleshooting guide for "Receiving end does not exist" errors
+
+- **Chrome AI Integration Testing**:
+  - Real-time Chrome AI availability detection (`window.ai.languageModel`, `window.ai.summarizer`)
+  - Interactive keyword extraction testing with JSON Schema validation
+  - Summarizer API testing with content input and progress monitoring
+  - Full chat search flow testing with step-by-step timing analysis
+  - Model download progress indicators and quota usage tracking
+
+- **DB Explorer**:
+  - Run arbitrary SQL (read‑only by default, with a guarded "Write mode" toggle)
+  - Inspect table counts, index health, and recent ingestion queue
+  - PostgreSQL-specific sample queries for vector operations and full-text search
+  - Buttons: Clear DB (drop and recreate tables), Clear Model Cache, Export DB, Import DB (optional)
+
+- **AI Summarization Queue Management**:
   - Real-time queue stats (queued, processing, completed, failed)
-  - Currently processing item details
-  - Queue management buttons (Process Queue, Clear Queue)
-  - Sample SQL queries for queue inspection
-- Add a context menu entry (via `chrome.contextMenus`) named "AI History: Debug" that opens `debug.html` in a new tab.
+  - Currently processing item details with URL and progress
+  - Queue management buttons (Process Queue, Clear Queue, Reset Stuck Items)
+  - Advanced debugging tools: Add test items, monitor LISTEN/NOTIFY, show processing timeline
+  - Sample SQL queries for queue inspection and maintenance
+
+- **Content Analysis Tools**:
+  - Recent pages content analysis with embedding status
+  - Search mode performance comparison (hybrid, vector-only, text-only)
+  - Content extraction statistics and favicon loading status
+
+- **System Monitoring**:
+  - Live log viewer with filtering by level (info, warn, error, debug)
+  - Auto-refresh capabilities and log export functionality
+  - Performance metrics for search operations and AI model operations
+
+- **Context Menu Integration**: "AI History: Debug" entry opens `debug.html` in new tab for quick access
 
 
 ## Background and Offscreen Orchestration

@@ -4,6 +4,8 @@
  * Assumes Chrome AI APIs are always available
  */
 
+import { chromeAILoader } from './chrome-ai-loader.js';
+
 export class AIBridge {
   constructor() {
     this.languageSession = null;
@@ -13,42 +15,42 @@ export class AIBridge {
   }
 
   /**
-   * Initialize AI capabilities - assumes Chrome AI is available
+   * Initialize AI capabilities - waits for Chrome AI to load
    */
-  async initialize() {
+  async initialize(onProgress = null) {
     if (this.isInitialized) return this.capabilities;
 
-    // Check for Chrome 138+ global APIs first
-    const hasLanguageModel = typeof LanguageModel !== 'undefined';
-    const hasSummarizer = typeof Summarizer !== 'undefined';
+    // Wait for Chrome AI APIs to become available
+    const apiInfo = await chromeAILoader.waitForChromeAI(onProgress);
+    console.log('[AI-BRIDGE] Chrome AI APIs loaded:', apiInfo);
 
-    if (hasLanguageModel) {
-      const langAvailability = await LanguageModel.availability();
-      const summAvailability = hasSummarizer ? await Summarizer.availability() : 'unavailable';
+    const langAvailability = await LanguageModel.availability();
+    const summAvailability = typeof Summarizer !== 'undefined' ? await Summarizer.availability() : 'unavailable';
 
-      this.capabilities = {
-        languageModel: {
-          available: langAvailability,
-          ready: langAvailability === 'available'
-        },
-        summarizer: hasSummarizer ? {
-          available: summAvailability,
-          ready: summAvailability === 'available'
-        } : null
-      };
-      console.log('[AI-BRIDGE] Chrome 138+ APIs initialized:', langAvailability, summAvailability);
-    } else if (window.ai?.languageModel) {
-      // Handle legacy window.ai
-      this.capabilities = {
-        languageModel: window.ai.languageModel ?
-          await window.ai.languageModel.capabilities() : null,
-        summarizer: window.ai.summarizer ?
-          await window.ai.summarizer.capabilities() : null
-      };
-      console.log('[AI-BRIDGE] Legacy window.ai APIs initialized');
-    } else {
-      throw new Error('Chrome AI APIs not available - ensure Chrome Canary with AI flags enabled');
-    }
+    // Get default parameters for Chrome 138+
+    let defaultParams = {};
+      try {
+        defaultParams = await LanguageModel.params();
+      } catch (e) {
+        console.warn('[AI-BRIDGE] Could not get default parameters:', e);
+      }
+
+    this.capabilities = {
+      languageModel: {
+        available: langAvailability,
+        ready: langAvailability === 'available',
+        downloadable: langAvailability === 'downloadable',
+        downloading: langAvailability === 'downloading',
+        params: defaultParams
+      },
+      summarizer: typeof Summarizer !== 'undefined' ? {
+        available: summAvailability,
+        ready: summAvailability === 'available',
+        downloadable: summAvailability === 'downloadable',
+        downloading: summAvailability === 'downloading'
+      } : null
+    };
+    console.log('[AI-BRIDGE] Chrome AI APIs initialized:', langAvailability, summAvailability);
 
     this.isInitialized = true;
     return this.capabilities;
@@ -77,42 +79,41 @@ export class AIBridge {
   }
 
   /**
-   * Create a language model session
+   * Create a language model session with proper initialPrompts support
    */
   async createLanguageSession(options = {}) {
     await this.initialize();
 
+    const params = this.capabilities?.languageModel?.params || {};
     const sessionOptions = {
-      initialPrompts: [{
+      initialPrompts: options.initialPrompts || [{
         role: 'system',
         content: options.systemPrompt || this.getDefaultSystemPrompt()
       }],
-      temperature: options.temperature || 0.7,
-      topK: options.topK || 3,
-      language: options.language || 'en'
-      // outputLanguage: options.outputLanguage || 'en'  // Commented out for testing
+      temperature: options.temperature || params.defaultTemperature || 0.7,
+      topK: options.topK || params.defaultTopK || 3
     };
+
+    // Add monitor for download progress if requested
+    if (options.showProgress) {
+      sessionOptions.monitor = (m) => {
+        m.addEventListener('downloadprogress', (e) => {
+          console.log(`[AI-BRIDGE] Model download progress: ${Math.round(e.loaded * 100)}%`);
+          if (options.onProgress) {
+            options.onProgress(e.loaded);
+          }
+        });
+      };
+    }
 
     // Use global LanguageModel for Chrome 138+
     if (typeof LanguageModel !== 'undefined') {
       const availability = await LanguageModel.availability();
-      if (availability !== 'available' && availability !== 'downloadable') {
+      if (availability === 'unavailable') {
         throw new Error(`Language model not available: ${availability}`);
       }
       console.log('[AI-BRIDGE] Creating session with Chrome 138+ LanguageModel API');
       this.languageSession = await LanguageModel.create(sessionOptions);
-    } else if (window.ai?.languageModel) {
-      // Handle legacy API with adapted options
-      const legacyOptions = {
-        systemPrompt: options.systemPrompt || this.getDefaultSystemPrompt(),
-        temperature: options.temperature || 0.7,
-        topK: options.topK || 3,
-        language: options.language || 'en',
-        // outputLanguage: options.outputLanguage || 'en',  // Commented out for testing
-        ...options
-      };
-      console.log('[AI-BRIDGE] Creating session with legacy window.ai API');
-      this.languageSession = await window.ai.languageModel.create(legacyOptions);
     } else {
       throw new Error('Chrome AI LanguageModel API not available');
     }
@@ -143,17 +144,41 @@ Remember: You can only reference information from the provided browsing history 
   }
 
   /**
-   * Generate a response using the language model
+   * Add context to the current session using append()
+   */
+  async appendContext(context) {
+    if (!this.languageSession) {
+      throw new Error('No active language session. Create session first.');
+    }
+
+    const contextMessage = {
+      role: 'system',
+      content: context
+    };
+
+    try {
+      await this.languageSession.append([contextMessage]);
+    } catch (error) {
+      console.error('[AI-BRIDGE] Failed to append context:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate a response using the language model with context appending
    */
   async generateResponse(prompt, context = '') {
     if (!this.languageSession) {
       await this.createLanguageSession();
     }
 
-    const fullPrompt = context ? `Context from browsing history:\n${context}\n\nUser question: ${prompt}` : prompt;
+    // Append context if provided
+    if (context) {
+      await this.appendContext(`Context from browsing history:\n${context}`);
+    }
 
     try {
-      const response = await this.languageSession.prompt(fullPrompt);
+      const response = await this.languageSession.prompt(prompt);
       return response;
     } catch (error) {
       console.error('[AI-BRIDGE] Failed to generate response:', error);
@@ -162,17 +187,20 @@ Remember: You can only reference information from the provided browsing history 
   }
 
   /**
-   * Generate a streaming response
+   * Generate a streaming response with context appending
    */
   async generateStreamingResponse(prompt, context = '', onChunk = null) {
     if (!this.languageSession) {
       await this.createLanguageSession();
     }
 
-    const fullPrompt = context ? `Context from browsing history:\n${context}\n\nUser question: ${prompt}` : prompt;
+    // Append context if provided
+    if (context) {
+      await this.appendContext(`Context from browsing history:\n${context}`);
+    }
 
     try {
-      const stream = await this.languageSession.promptStreaming(fullPrompt);
+      const stream = await this.languageSession.promptStreaming(prompt);
       let fullResponse = '';
 
       for await (const chunk of stream) {
@@ -212,30 +240,37 @@ Remember: You can only reference information from the provided browsing history 
   }
 
   /**
-   * Create a summarizer session
+   * Create a summarizer session with Chrome 138+ API support
    */
   async createSummarizerSession(options = {}) {
     await this.initialize();
 
     const sessionOptions = {
-      type: options.type || 'tl;dr',
+      type: options.type || 'tldr', // Fixed typo: 'tl;dr' -> 'tldr'
       format: options.format || 'markdown',
-      length: options.length || 'short',
-      ...options
+      length: options.length || 'short'
     };
+
+    // Add monitor for download progress if requested
+    if (options.showProgress) {
+      sessionOptions.monitor = (m) => {
+        m.addEventListener('downloadprogress', (e) => {
+          console.log(`[AI-BRIDGE] Summarizer download progress: ${Math.round(e.loaded * 100)}%`);
+          if (options.onProgress) {
+            options.onProgress(e.loaded);
+          }
+        });
+      };
+    }
 
     // Use global Summarizer for Chrome 138+
     if (typeof Summarizer !== 'undefined') {
       const availability = await Summarizer.availability();
-      if (availability !== 'available' && availability !== 'downloadable') {
+      if (availability === 'unavailable') {
         throw new Error(`Summarizer not available: ${availability}`);
       }
       console.log('[AI-BRIDGE] Creating summarizer session with Chrome 138+ API');
       this.summarizerSession = await Summarizer.create(sessionOptions);
-    } else if (window.ai?.summarizer) {
-      // Handle legacy API
-      console.log('[AI-BRIDGE] Creating summarizer session with legacy window.ai API');
-      this.summarizerSession = await window.ai.summarizer.create(sessionOptions);
     } else {
       throw new Error('Chrome AI Summarizer API not available');
     }
@@ -244,7 +279,7 @@ Remember: You can only reference information from the provided browsing history 
   }
 
   /**
-   * Summarize text content
+   * Summarize text content with context support
    */
   async summarize(text, options = {}) {
     if (!this.summarizerSession) {
@@ -252,10 +287,47 @@ Remember: You can only reference information from the provided browsing history 
     }
 
     try {
-      const summary = await this.summarizerSession.summarize(text);
+      // Use context parameter if provided for better summaries
+      const summarizeOptions = {};
+      if (options.context) {
+        summarizeOptions.context = options.context;
+      }
+
+      const summary = await this.summarizerSession.summarize(text, summarizeOptions);
       return summary;
     } catch (error) {
       console.error('[AI-BRIDGE] Failed to summarize text:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Streaming summarization
+   */
+  async summarizeStreaming(text, options = {}, onChunk = null) {
+    if (!this.summarizerSession) {
+      await this.createSummarizerSession(options);
+    }
+
+    try {
+      const summarizeOptions = {};
+      if (options.context) {
+        summarizeOptions.context = options.context;
+      }
+
+      const stream = await this.summarizerSession.summarizeStreaming(text, summarizeOptions);
+      let fullSummary = '';
+
+      for await (const chunk of stream) {
+        fullSummary = chunk;
+        if (onChunk) {
+          onChunk(chunk);
+        }
+      }
+
+      return fullSummary;
+    } catch (error) {
+      console.error('[AI-BRIDGE] Failed to stream summarize text:', error);
       throw error;
     }
   }
@@ -291,6 +363,27 @@ Remember: You can only reference information from the provided browsing history 
   }
 
   /**
+   * Get session quota information
+   */
+  getSessionQuota() {
+    if (!this.languageSession) {
+      return null;
+    }
+
+    try {
+      return {
+        inputUsage: this.languageSession.inputUsage || 0,
+        inputQuota: this.languageSession.inputQuota || 0,
+        usagePercent: this.languageSession.inputQuota ?
+          Math.round((this.languageSession.inputUsage / this.languageSession.inputQuota) * 100) : 0
+      };
+    } catch (error) {
+      console.warn('[AI-BRIDGE] Could not get session quota:', error);
+      return null;
+    }
+  }
+
+  /**
    * Check if AI is ready for use
    */
   isReady() {
@@ -298,6 +391,7 @@ Remember: You can only reference information from the provided browsing history 
       this.capabilities?.languageModel?.ready ||
       this.capabilities?.languageModel?.available === 'readily' ||
       this.capabilities?.languageModel?.available === 'available' ||
+      this.capabilities?.languageModel?.downloadable ||
       this.capabilities?.languageModel?.available === 'downloadable'
     );
   }

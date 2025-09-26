@@ -38,7 +38,8 @@ const OFFSCREEN_MESSAGE_TYPES = new Set([
   'execute-sql', 'clear-model-cache', 'export-db', 'import-db', 'update-summary',
   'ping', 'refresh-ai-prefs', 'reload-embeddings', 'get-model-status',
   'start-remote-warm', 'get-summary-queue-stats', 'process-summary-queue',
-  'clear-summary-queue'
+  'clear-summary-queue', 'save-chat-message', 'get-chat-messages', 'clear-chat-thread',
+  'get-chat-thread-stats'
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -214,6 +215,49 @@ async function handleMessage(message, sendResponse) {
           sendResponse({ status: 'ok', message: 'Summary queue cleared' });
         } catch (e) {
           sendResponse({ error: e.message });
+        }
+        break;
+
+      case 'save-chat-message':
+        try {
+          const { threadId = 'default', role, content } = message.data;
+          const messageId = await db.saveChatMessage(threadId, role, content);
+
+          // Auto-prune to keep only last 200 messages
+          await db.pruneChatMessages(threadId, 200);
+
+          sendResponse({ messageId, success: true });
+        } catch (error) {
+          sendResponse({ error: error.message });
+        }
+        break;
+
+      case 'get-chat-messages':
+        try {
+          const { threadId = 'default', limit = 48 } = message.data || {};
+          const messages = await db.getChatMessages(threadId, limit);
+          sendResponse({ messages });
+        } catch (error) {
+          sendResponse({ error: error.message });
+        }
+        break;
+
+      case 'clear-chat-thread':
+        try {
+          const { threadId = 'default' } = message.data || {};
+          const deletedCount = await db.clearChatThread(threadId);
+          sendResponse({ deletedCount, success: true });
+        } catch (error) {
+          sendResponse({ error: error.message });
+        }
+        break;
+
+      case 'get-chat-thread-stats':
+        try {
+          const stats = await db.getChatThreadStats();
+          sendResponse({ stats });
+        } catch (error) {
+          sendResponse({ error: error.message });
         }
         break;
 
@@ -467,6 +511,44 @@ class DatabaseWrapper {
       ON summarization_queue(status, created_at);
     `);
     console.log('[QUEUE-DB] ✅ Summarization queue table created successfully');
+
+    // Create chat thread table
+    console.log('[CHAT-DB] Creating chat thread table...');
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_thread (
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create chat message table
+    console.log('[CHAT-DB] Creating chat message table...');
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_message (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES chat_thread(id),
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create chat message embedding table (optional for semantic recall)
+    console.log('[CHAT-DB] Creating chat message embedding table...');
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_message_embedding (
+        message_id TEXT PRIMARY KEY REFERENCES chat_message(id) ON DELETE CASCADE,
+        embedding vector(384)
+      )
+    `);
+
+    // Create indexes for chat tables
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_chat_message_thread ON chat_message(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_message_created ON chat_message(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_message_embedding_vec ON chat_message_embedding USING ivfflat (embedding vector_cosine_ops) WITH (lists = 10);
+    `);
+    console.log('[CHAT-DB] ✅ Chat message tables created successfully');
 
     this._isVecTable = true;
   }
@@ -817,6 +899,98 @@ class DatabaseWrapper {
     return scored;
   }
 
+  // Enhanced search with keyword filtering
+  async searchWithKeywords(query, keywords, options = {}) {
+    // If no keywords provided, fall back to regular search
+    if (!keywords) {
+      return await this.search(query, options);
+    }
+
+    const {
+      mode = 'hybrid-rerank',
+      limit = 25,
+      queryEmbedding
+    } = options;
+
+    console.log('[DB] Searching with keywords:', keywords);
+
+    // Build enhanced query with keyword filters
+    let textQuery = query;
+    let vectorQuery = query;
+
+    // Apply must_include terms as positive filters
+    if (keywords.must_include && keywords.must_include.length > 0) {
+      const mustIncludeTerms = keywords.must_include.join(' ');
+      textQuery = `${query} ${mustIncludeTerms}`;
+      vectorQuery = `${query} ${mustIncludeTerms}`;
+    }
+
+    // Add phrases as exact matches
+    if (keywords.phrases && keywords.phrases.length > 0) {
+      const phraseQueries = keywords.phrases.map(phrase => `"${phrase}"`).join(' ');
+      textQuery = `${textQuery} ${phraseQueries}`;
+      vectorQuery = `${vectorQuery} ${keywords.phrases.join(' ')}`;
+    }
+
+    // Use the enhanced queries for search
+    const results = await this.search(vectorQuery, {
+      mode,
+      limit: limit * 2, // Get more results for filtering
+      queryEmbedding
+    });
+
+    // Apply must_exclude filtering
+    let filteredResults = results;
+    if (keywords.must_exclude && keywords.must_exclude.length > 0) {
+      filteredResults = results.filter(result => {
+        const content = [
+          result.title || '',
+          result.content_text || '',
+          result.url || '',
+          result.domain || ''
+        ].join(' ').toLowerCase();
+
+        return !keywords.must_exclude.some(excludeTerm =>
+          content.includes(excludeTerm.toLowerCase())
+        );
+      });
+    }
+
+    // Apply keyword boosting
+    const boostedResults = filteredResults.map(result => {
+      let boostScore = 0;
+
+      // Boost for keyword matches in title/content
+      if (keywords.keywords && keywords.keywords.length > 0) {
+        const content = [result.title || '', result.content_text || ''].join(' ').toLowerCase();
+        const matchCount = keywords.keywords.filter(keyword =>
+          content.includes(keyword.toLowerCase())
+        ).length;
+        boostScore += (matchCount / keywords.keywords.length) * 0.1;
+      }
+
+      // Boost for phrase matches
+      if (keywords.phrases && keywords.phrases.length > 0) {
+        const content = [result.title || '', result.content_text || ''].join(' ').toLowerCase();
+        const phraseMatchCount = keywords.phrases.filter(phrase =>
+          content.includes(phrase.toLowerCase())
+        ).length;
+        boostScore += (phraseMatchCount / keywords.phrases.length) * 0.15;
+      }
+
+      return {
+        ...result,
+        finalScore: (result.finalScore || result.score || 0) + boostScore,
+        keywordBoost: boostScore
+      };
+    });
+
+    // Re-sort and limit results
+    return boostedResults
+      .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0))
+      .slice(0, limit);
+  }
+
   // This method is no longer needed with PGlite as it returns proper objects
   // Keeping for compatibility but it's essentially a pass-through now
   rowToObject(row, columnNames = null) {
@@ -863,6 +1037,100 @@ class DatabaseWrapper {
         console.error('[DB] Fallback clear failed:', fallbackError);
         throw fallbackError;
       }
+    }
+  }
+
+  // Chat message management functions
+  async ensureChatThread(threadId = 'default') {
+    try {
+      await this.db.query('INSERT INTO chat_thread (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [threadId]);
+      return threadId;
+    } catch (error) {
+      console.error('[DB] Failed to ensure chat thread:', error);
+      throw error;
+    }
+  }
+
+  async saveChatMessage(threadId, role, content) {
+    try {
+      await this.ensureChatThread(threadId);
+
+      const messageId = `${threadId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      await this.db.query(`
+        INSERT INTO chat_message (id, thread_id, role, content)
+        VALUES ($1, $2, $3, $4)
+      `, [messageId, threadId, role, content]);
+
+      return messageId;
+    } catch (error) {
+      console.error('[DB] Failed to save chat message:', error);
+      throw error;
+    }
+  }
+
+  async getChatMessages(threadId = 'default', limit = 200) {
+    try {
+      const result = await this.db.query(`
+        SELECT id, role, content, created_at
+        FROM chat_message
+        WHERE thread_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+      `, [threadId, limit]);
+
+      // Return in chronological order (oldest first)
+      return result.rows.reverse();
+    } catch (error) {
+      console.error('[DB] Failed to get chat messages:', error);
+      return [];
+    }
+  }
+
+  async pruneChatMessages(threadId = 'default', keepCount = 200) {
+    try {
+      const result = await this.db.query(`
+        DELETE FROM chat_message
+        WHERE thread_id = $1
+          AND id IN (
+            SELECT id FROM chat_message
+            WHERE thread_id = $1
+            ORDER BY created_at ASC
+            OFFSET $2
+          )
+      `, [threadId, keepCount]);
+
+      return result.rowCount || 0;
+    } catch (error) {
+      console.error('[DB] Failed to prune chat messages:', error);
+      return 0;
+    }
+  }
+
+  async clearChatThread(threadId = 'default') {
+    try {
+      const result = await this.db.query('DELETE FROM chat_message WHERE thread_id = $1', [threadId]);
+      return result.rowCount || 0;
+    } catch (error) {
+      console.error('[DB] Failed to clear chat thread:', error);
+      return 0;
+    }
+  }
+
+  async getChatThreadStats() {
+    try {
+      const result = await this.db.query(`
+        SELECT
+          COUNT(*) as total_messages,
+          COUNT(DISTINCT thread_id) as thread_count,
+          MAX(created_at) as latest_message
+        FROM chat_message
+      `);
+
+      return result.rows[0] || { total_messages: 0, thread_count: 0, latest_message: null };
+    } catch (error) {
+      console.error('[DB] Failed to get chat thread stats:', error);
+      return { total_messages: 0, thread_count: 0, latest_message: null };
     }
   }
 }
@@ -1370,28 +1638,99 @@ async function getBrowserHistory({ query = '', limit = 1000 } = {}) {
   }
 }
 
+async function getBrowserHistoryWithKeywords({ query = '', keywords, limit = 1000 } = {}) {
+  try {
+    // Get regular browser history first
+    const historyResponse = await getBrowserHistory({ query, limit });
+
+    if (historyResponse.error || !historyResponse.results) {
+      return historyResponse;
+    }
+
+    let results = historyResponse.results;
+
+    // Apply keyword filtering if provided
+    if (keywords) {
+      console.log('[OFFSCREEN] Applying keyword filters to browser history:', keywords);
+
+      // Filter out must_exclude terms
+      if (keywords.must_exclude && keywords.must_exclude.length > 0) {
+        results = results.filter(item => {
+          const content = [item.title || '', item.url || ''].join(' ').toLowerCase();
+          return !keywords.must_exclude.some(excludeTerm =>
+            content.includes(excludeTerm.toLowerCase())
+          );
+        });
+      }
+
+      // Boost results with keyword matches
+      results = results.map(item => {
+        let boostScore = 0;
+        const content = [item.title || '', item.url || ''].join(' ').toLowerCase();
+
+        // Boost for general keywords
+        if (keywords.keywords && keywords.keywords.length > 0) {
+          const matchCount = keywords.keywords.filter(keyword =>
+            content.includes(keyword.toLowerCase())
+          ).length;
+          boostScore += (matchCount / keywords.keywords.length) * 0.1;
+        }
+
+        // Boost for exact phrases
+        if (keywords.phrases && keywords.phrases.length > 0) {
+          const phraseMatchCount = keywords.phrases.filter(phrase =>
+            content.includes(phrase.toLowerCase())
+          ).length;
+          boostScore += (phraseMatchCount / keywords.phrases.length) * 0.15;
+        }
+
+        return {
+          ...item,
+          keywordBoost: boostScore,
+          finalScore: boostScore // Browser history doesn't have existing scores
+        };
+      });
+
+      // Sort by keyword relevance if we have boosts
+      if (keywords.keywords?.length > 0 || keywords.phrases?.length > 0) {
+        results.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+      }
+    }
+
+    return { results };
+  } catch (error) {
+    console.error('[OFFSCREEN] Browser history with keywords fetch failed:', error);
+    return { error: error.message };
+  }
+}
+
 // Search implementation with browser history integration
-async function search({ query, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
+async function search({ query, keywords, mode = 'hybrid-rerank', limit = 25, offset = 0 }) {
   try {
     // For empty queries, return combined browser history + PGlite data
     if (!query || query.trim().length === 0) {
       return await getCombinedHistory({ limit, offset });
     }
 
+    console.log('[SEARCH] Query:', query);
+    if (keywords) {
+      console.log('[SEARCH] Extracted keywords:', keywords);
+    }
+
     // For search queries, get results from both sources
     const [pgliteResponse, browserResponse] = await Promise.allSettled([
-      // PGlite search with embeddings
+      // PGlite search with embeddings and keyword filtering
       (async () => {
         const queryEmbedding = await embed(query);
-        return await db.search(query, {
+        return await db.searchWithKeywords(query, keywords, {
           mode,
           limit: Math.ceil(limit * 1.5), // Get more results for merging
           offset: 0, // Always start from beginning for merging
           queryEmbedding
         });
       })(),
-      // Browser history search
-      getBrowserHistory({ query, limit: Math.ceil(limit * 1.5) })
+      // Browser history search with keyword filtering
+      getBrowserHistoryWithKeywords({ query, keywords, limit: Math.ceil(limit * 1.5) })
     ]);
 
     const pgliteResults = pgliteResponse.status === 'fulfilled' ? pgliteResponse.value : [];

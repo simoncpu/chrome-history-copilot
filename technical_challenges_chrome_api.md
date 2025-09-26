@@ -320,67 +320,175 @@ class ChromeAI {
 }
 ```
 
-## Challenge 8: Graceful Degradation and Fallback Implementation
+## Challenge 8: Complete Chat Search Flow Implementation
 
 ### Problem
-Extensions need to provide value even when Chrome AI APIs are unavailable:
-- User experience should not break when AI is disabled
-- Fallback responses should still be useful and informative
-- Clear communication about AI availability status
+The extension needed to implement the complete Chrome AI-powered chat search flow as specified:
+- Two-stage keyword extraction → search → response generation
+- Message retention with PGlite database integration
+- Session management with `initialPrompts` and context appending
+- Keyword-filtered hybrid search with must_include/must_exclude logic
+- JSON Schema-constrained AI responses for structured data extraction
 
 ### Manifestation
 ```javascript
-// Poor user experience - extension breaks:
-async function generateResponse(query) {
-  const session = await window.ai.languageModel.create(); // Throws error
-  return await session.prompt(query); // Never reached
-}
-```
-
-### Solution
-Implement comprehensive fallback system with graceful degradation:
-
-```javascript
-async function generateResponse(userMessage, searchResults) {
-  try {
-    await aiBridge.initialize();
-    if (aiBridge.isReady()) {
-      console.log('[CHAT] Using Chrome AI for response generation');
-      return await generateWithChromeAI(userMessage, searchResults);
-    }
-  } catch (error) {
-    console.log('[CHAT] Chrome AI unavailable, using fallback:', error.message);
-  }
-
-  // Fallback: structured response without AI
-  return generateFallbackResponse(userMessage, searchResults);
-}
-
-function generateFallbackResponse(userMessage, searchResults) {
-  if (searchResults.length === 0) {
-    return `I couldn't find any pages in your browsing history that match your query: "${userMessage}"`;
-  }
-
-  let response = `**Found ${searchResults.length} relevant pages:**\n\n`;
-
-  searchResults.slice(0, 5).forEach((result, i) => {
-    response += `**${i + 1}. [${result.title}](${result.url})**\n`;
-    if (result.summary || result.snippet) {
-      response += `${(result.summary || result.snippet).substring(0, 150)}...\n`;
-    }
-    response += '\n';
-  });
-
-  response += '*Note: Enhanced AI responses are currently unavailable.*';
+// Simple but incomplete implementation:
+async function generateResponse(userMessage) {
+  const searchResults = await simpleSearch(userMessage);
+  const response = await ai.prompt(`Answer based on: ${searchResults}`);
   return response;
 }
 ```
 
+### Solution
+Implement the complete chat search flow with proper Chrome 138+ API integration:
+
+```javascript
+// Stage 1: Keyword Extraction with JSON Schema
+const keywordExtractor = new KeywordExtractor();
+const extractedKeywords = await keywordExtractor.extractKeywords(userMessage);
+
+// Stage 2: Enhanced Search with Keywords
+const searchResults = await searchHistoryWithKeywords(extractedKeywords, userMessage);
+
+// Stage 3: Session Management with Context
+const recentMessages = getRecentMessagesForSession(24);
+const aiSession = await aiBridge.createLanguageSession({
+  initialPrompts: recentMessages
+});
+
+// Stage 4: Context Appending and Response Generation
+const searchContext = buildSearchContext(searchResults);
+const response = await aiBridge.generateResponse(userMessage, searchContext);
+
+// Stage 5: Message Persistence
+await saveChatMessage('user', userMessage);
+await saveChatMessage('assistant', response);
+```
+
+### Implementation Components
+
+#### Keyword Extraction Service (`keyword-extractor.js`)
+```javascript
+class KeywordExtractor {
+  async extractKeywords(query) {
+    const response = await this.extractionSession.prompt(instruction, {
+      responseConstraint: this.getExtractionSchema(),
+      omitResponseConstraintInput: true
+    });
+    return JSON.parse(response);
+  }
+
+  getExtractionSchema() {
+    return {
+      type: "object",
+      properties: {
+        keywords: { type: "array", items: { type: "string" } },
+        phrases: { type: "array", items: { type: "string" } },
+        must_include: { type: "array", items: { type: "string" } },
+        must_exclude: { type: "array", items: { type: "string" } }
+      },
+      required: ["keywords", "phrases", "must_include", "must_exclude"]
+    };
+  }
+}
+```
+
+#### Enhanced Search Integration
+```javascript
+async function searchWithKeywords(query, keywords, options = {}) {
+  // Apply must_include terms as positive filters
+  if (keywords.must_include && keywords.must_include.length > 0) {
+    const mustIncludeTerms = keywords.must_include.join(' ');
+    textQuery = `${query} ${mustIncludeTerms}`;
+  }
+
+  // Apply must_exclude filtering
+  if (keywords.must_exclude && keywords.must_exclude.length > 0) {
+    filteredResults = results.filter(result => {
+      const content = [result.title, result.content_text, result.url].join(' ').toLowerCase();
+      return !keywords.must_exclude.some(excludeTerm =>
+        content.includes(excludeTerm.toLowerCase())
+      );
+    });
+  }
+
+  // Apply keyword boosting
+  const boostedResults = filteredResults.map(result => {
+    let boostScore = 0;
+    if (keywords.keywords && keywords.keywords.length > 0) {
+      const matchCount = keywords.keywords.filter(keyword =>
+        content.includes(keyword.toLowerCase())
+      ).length;
+      boostScore += (matchCount / keywords.keywords.length) * 0.1;
+    }
+    return { ...result, finalScore: result.finalScore + boostScore };
+  });
+}
+```
+
+#### Message Retention System
+```javascript
+// PGlite Schema Extensions
+CREATE TABLE IF NOT EXISTS chat_thread (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_message (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES chat_thread(id),
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+// Automatic FIFO Retention
+async function saveChatMessage(role, content) {
+  await db.saveChatMessage(threadId, role, content);
+  await db.pruneChatMessages(threadId, 200); // Keep only last 200 messages
+}
+```
+
 ### Implementation Details
-- Added comprehensive fallback in `chrome-extension/sidepanel/history_chat.js`
-- Status messages clearly indicate AI availability state
-- Fallback responses are still useful and formatted properly
-- Extension remains fully functional without AI APIs
+- **Complete API Integration**: Full Chrome 138+ `LanguageModel` and `Summarizer` support
+- **Session Management**: `initialPrompts` for chat context, `append()` for search context
+- **Structured Extraction**: JSON Schema `responseConstraint` for consistent keyword extraction
+- **Enhanced Search**: Keyword filtering with must_include/must_exclude logic and boosting
+- **Database Integration**: PGlite tables for persistent chat message retention
+- **Debug Interface**: Comprehensive testing tools for all Chrome AI components
+
+### Challenges Encountered During Implementation
+
+#### 1. Session Context Management Complexity
+**Issue**: Managing chat context across multiple API calls while respecting quota limits
+**Solution**: Used `initialPrompts` for persistent context and `append()` for dynamic search context
+**Code Location**: `chrome-extension/sidepanel/history_chat.js:getRecentMessagesForSession()`
+
+#### 2. JSON Schema Validation Requirements
+**Issue**: Ensuring consistent keyword extraction output format
+**Solution**: Implemented strict JSON Schema with `responseConstraint` and post-processing validation
+**Code Location**: `chrome-extension/bridge/keyword-extractor.js:getExtractionSchema()`
+
+#### 3. PGlite Schema Integration with Chat Tables
+**Issue**: Adding chat message tables without breaking existing vector search functionality
+**Solution**: Carefully designed referential integrity with proper indexing for performance
+**Code Location**: `chrome-extension/offscreen.js:initializeSchema()`
+
+#### 4. Keyword-to-Search Parameter Mapping
+**Issue**: Translating extracted keywords into effective search parameters
+**Solution**: Implemented multi-stage filtering with positive boosts, negative exclusions, and phrase matching
+**Code Location**: `chrome-extension/offscreen.js:searchWithKeywords()`
+
+#### 5. Message Retention Performance
+**Issue**: Ensuring chat message storage doesn't impact search performance
+**Solution**: Separate tables with efficient indexing and automatic FIFO pruning
+**Code Location**: `chrome-extension/offscreen.js:DatabaseWrapper.pruneChatMessages()`
+
+#### 6. Debug Interface Complexity
+**Issue**: Creating comprehensive testing tools without overwhelming the debug UI
+**Solution**: Modular testing sections with collapsible results and step-by-step flow testing
+**Code Location**: `chrome-extension/debug.html` and `debug.js:handleTestFullChatFlow()`
 
 ## Best Practices Developed
 
@@ -445,16 +553,17 @@ async function generateResponse(userMessage, searchResults) {
 
 ## Current Status
 
-As of the latest implementation (December 2024):
-- ✅ Chrome 138+ global API support (`LanguageModel`, `Summarizer`)
-- ✅ Legacy `window.ai` API fallback for older Chrome versions
-- ✅ Proper availability checking using `LanguageModel.availability()`
-- ✅ User activation requirements respected
-- ✅ Input size limiting and retry logic in place
-- ✅ Session management with error recovery
-- ✅ Clear error messages when AI unavailable
-- ✅ Simplified architecture assuming Chrome AI availability
-- ⚠️ **REMOVED: Fallback functionality** - Extension now assumes Chrome AI is available
+As of the latest implementation (January 2025):
+- ✅ **Complete Chrome 138+ API Integration**: Full support for `LanguageModel` and `Summarizer` global APIs
+- ✅ **Chat Search Flow Implementation**: Two-stage keyword extraction → search → response generation
+- ✅ **Keyword Extraction Service**: Uses Prompt API with JSON Schema responseConstraint
+- ✅ **Message Retention System**: PGlite-based chat history with automatic FIFO eviction (200 messages)
+- ✅ **Session Management**: `initialPrompts` for chat context, `append()` for search context
+- ✅ **Enhanced Search Integration**: Keyword-filtered hybrid search with must_include/must_exclude
+- ✅ **Progress Tracking**: Model download progress, quota usage monitoring
+- ✅ **Error Handling**: Specific error messages for AI unavailability, quota limits, downloads
+- ✅ **Debug Interface**: Comprehensive testing tools for all Chrome AI components
+- ✅ **No Fallback Architecture**: Extension requires Chrome AI to be properly configured
 
 ## Architecture Simplification (2025 Update)
 
@@ -543,9 +652,69 @@ async function initializeAI() {
 4. **Error Recovery**: Implement retry mechanisms for transient AI failures
 5. **Session Management**: Optimize session lifecycle and resource usage
 
+## Chat Search Flow Implementation
+
+The extension now implements the complete Chat Search Flow as specified:
+
+### 1. Boot and Session Priming
+- **File**: `chrome-extension/sidepanel/history_chat.js:loadChatHistory()`
+- Loads recent chat messages from PGlite database
+- Creates Prompt API session with `initialPrompts` containing chat history
+- Tracks `session.inputUsage` vs `session.inputQuota` for quota management
+
+### 2. Keyword Extraction
+- **File**: `chrome-extension/bridge/keyword-extractor.js`
+- Uses `LanguageModel.create()` with JSON Schema `responseConstraint`
+- Extracts: `keywords`, `phrases`, `must_include`, `must_exclude`
+- Low temperature (0.1) and topK (1) for consistent extraction
+
+### 3. Enhanced Search Integration
+- **File**: `chrome-extension/offscreen.js:searchWithKeywords()`
+- Maps extracted keywords to hybrid search parameters
+- Applies `must_exclude` filtering and keyword boosting
+- Combines PGlite vector search with Chrome browser history search
+
+### 4. Context Building and Response Generation
+- **File**: `chrome-extension/sidepanel/history_chat.js:generateWithChromeAI()`
+- Uses `session.append()` to add search context
+- Maintains session with `initialPrompts` for chat continuity
+- Generates response with proper link inclusion
+
+### 5. Message Retention
+- **Database**: PGlite tables `chat_thread`, `chat_message`, `chat_message_embedding`
+- Automatic FIFO eviction (keeps last 200 messages per thread)
+- Real-time persistence with every user/assistant message
+
 ## Reference Implementation
 
 The complete Chrome AI integration can be found in:
-- `chrome-extension/bridge/ai-bridge.js` - Main API wrapper and session management
-- `chrome-extension/content-extractor.js` - Best-effort summarization in content script
-- `chrome-extension/sidepanel/history_chat.js` - Chat interface integration
+- `chrome-extension/bridge/ai-bridge.js` - Enhanced API wrapper with Chrome 138+ support
+- `chrome-extension/bridge/keyword-extractor.js` - JSON Schema-based keyword extraction
+- `chrome-extension/sidepanel/history_chat.js` - Complete chat search flow implementation
+- `chrome-extension/offscreen.js` - Message retention and enhanced search integration
+- `chrome-extension/debug.html` & `debug.js` - Comprehensive testing interface
+
+## Known Chrome Canary Issues (January 2025)
+
+### Output Language Warning (Ignored)
+
+**Warning Message**:
+```
+No output language was specified in a LanguageModel API request. An output language should be specified to ensure optimal output quality and properly attest to output safety. Please specify a supported output language code: [en, es, ja]
+```
+
+**Status**: This appears to be a bug or incomplete feature in Chrome Canary where the warning is displayed even when using the Chrome AI APIs correctly according to current documentation.
+
+**Root Cause**: The Chrome AI documentation does not specify how to set output language in `LanguageModel.create()` or `prompt()` methods. The warning suggests supported languages `[en, es, ja]` but provides no API guidance for specifying them.
+
+**Current Decision**: We're ignoring this warning for now because:
+1. It doesn't affect functionality - the AI responses work correctly
+2. No clear API exists to specify output language in current Chrome 138+
+3. The warning appears to be from an incomplete Chrome AI feature
+
+**Future Action**: We'll revisit this when:
+- Chrome AI documentation provides clear guidance on language specification
+- The warning becomes actionable with specific API parameters
+- Chrome releases stable APIs with language support
+
+**Workaround**: None required - extension functions normally despite the warning.

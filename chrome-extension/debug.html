@@ -562,6 +562,73 @@
     </div>
 
 
+    <!-- Chrome AI Integration Testing -->
+    <div class="section">
+      <h2 class="section-title">Chrome AI Integration Testing</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="chromeAiStatus">-</div>
+          <div class="stat-label">Language Model Status</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="summarizerStatus">-</div>
+          <div class="stat-label">Summarizer Status</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="keywordExtractorStatus">-</div>
+          <div class="stat-label">Keyword Extractor</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap;">
+        <button id="checkChromeAI" class="button button-primary">
+          🔍 Check Chrome AI Status
+        </button>
+        <button id="testKeywordExtraction" class="button button-secondary">
+          🔤 Test Keyword Extraction
+        </button>
+        <button id="testSummarizer" class="button button-secondary">
+          📝 Test Summarizer
+        </button>
+        <button id="testFullChatFlow" class="button button-secondary">
+          💬 Test Full Chat Flow
+        </button>
+      </div>
+
+      <div id="chromeAiTestResults" class="results-container hidden">
+        <div id="chromeAiTestContent"></div>
+      </div>
+
+      <!-- Test Input Area -->
+      <div style="margin-top: 16px;">
+        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #475569;">Test Inputs</h3>
+
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-weight: 500; margin-bottom: 4px;">Test Query:</label>
+          <input type="text" id="testQuery" placeholder="Enter a test query for keyword extraction..."
+                 style="width: 100%; padding: 8px; border: 1px solid #e2e8f0; border-radius: 8px;"
+                 value="Find me JavaScript tutorials I visited last week">
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-weight: 500; margin-bottom: 4px;">Test Content for Summarization:</label>
+          <textarea id="testContent" placeholder="Enter content to test summarization..."
+                    style="width: 100%; height: 100px; padding: 8px; border: 1px solid #e2e8f0; border-radius: 8px; resize: vertical;"
+                    >This is a sample article about artificial intelligence and machine learning. It covers various topics including neural networks, deep learning, and natural language processing. The article explains how these technologies are being used in modern applications like search engines, recommendation systems, and autonomous vehicles. It also discusses the potential implications of AI on society and the economy, highlighting both opportunities and challenges.</textarea>
+        </div>
+      </div>
+
+      <div style="background: #f8fafc; border-radius: 8px; padding: 12px; margin-top: 16px; font-size: 13px;">
+        <strong>💡 Chrome AI Testing Tips:</strong><br>
+        • Ensure Chrome Canary is running with AI flags enabled<br>
+        • Test keyword extraction with various query types<br>
+        • Verify chat session management with initialPrompts<br>
+        • Check quota usage tracking and session lifecycle<br>
+        • Monitor model download progress for unavailable models
+      </div>
+    </div>
+
     <!-- Recent Content Analysis -->
     <div class="section">
       <h2 class="section-title">Recent Content Analysis</h2>

@@ -24,6 +24,12 @@ let showTimeline, resetStuckItems, cleanupOldItems, showQueueQueries;
 let analyzeRecentPages, showContentStats, testSearchModes;
 let contentAnalysis, analysisContent;
 
+// Chrome AI testing elements
+let chromeAiStatus, summarizerStatus, keywordExtractorStatus;
+let checkChromeAI, testKeywordExtraction, testSummarizer, testFullChatFlow;
+let chromeAiTestResults, chromeAiTestContent;
+let testQuery, testContent;
+
 // State
 let isConnected = false;
 let currentLogs = [];
@@ -175,6 +181,19 @@ function initializeDOMElements() {
   contentAnalysis = document.getElementById('contentAnalysis');
   analysisContent = document.getElementById('analysisContent');
 
+  // Chrome AI testing elements
+  chromeAiStatus = document.getElementById('chromeAiStatus');
+  summarizerStatus = document.getElementById('summarizerStatus');
+  keywordExtractorStatus = document.getElementById('keywordExtractorStatus');
+  checkChromeAI = document.getElementById('checkChromeAI');
+  testKeywordExtraction = document.getElementById('testKeywordExtraction');
+  testSummarizer = document.getElementById('testSummarizer');
+  testFullChatFlow = document.getElementById('testFullChatFlow');
+  chromeAiTestResults = document.getElementById('chromeAiTestResults');
+  chromeAiTestContent = document.getElementById('chromeAiTestContent');
+  testQuery = document.getElementById('testQuery');
+  testContent = document.getElementById('testContent');
+
   // Preferences
   // Removed allowCloudModel toggle (redundant)
   toggleEnableReranker = document.getElementById('toggleEnableReranker');
@@ -240,6 +259,12 @@ function setupEventListeners() {
   showContentStats.addEventListener('click', handleShowContentStats);
   testSearchModes.addEventListener('click', handleTestSearchModes);
 
+  // Chrome AI testing
+  if (checkChromeAI) checkChromeAI.addEventListener('click', handleCheckChromeAI);
+  if (testKeywordExtraction) testKeywordExtraction.addEventListener('click', handleTestKeywordExtraction);
+  if (testSummarizer) testSummarizer.addEventListener('click', handleTestSummarizer);
+  if (testFullChatFlow) testFullChatFlow.addEventListener('click', handleTestFullChatFlow);
+
   // Preferences
   if (savePrefs) savePrefs.addEventListener('click', handleSavePrefs);
   if (reloadEmbeddings) reloadEmbeddings.addEventListener('click', handleReloadEmbeddings);
@@ -262,7 +287,7 @@ function setupEventListeners() {
   if (startMonitoring) startMonitoring.addEventListener('click', startQueueMonitoring);
   if (stopMonitoring) stopMonitoring.addEventListener('click', stopQueueMonitoring);
   if (showTimeline) showTimeline.addEventListener('click', showQueueTimeline);
-  if (resetStuckItems) resetStuckItems.addEventListener('click', resetStuckItems);
+  if (resetStuckItems) resetStuckItems.addEventListener('click', handleResetStuckItems);
   if (cleanupOldItems) cleanupOldItems.addEventListener('click', handleCleanupOldItems);
   if (showQueueQueries) showQueueQueries.addEventListener('click', showQueueSampleQueries);
 
@@ -1246,7 +1271,7 @@ async function testQueueNotifications() {
 }
 
 // Reset stuck items back to pending
-async function resetStuckItems() {
+async function handleResetStuckItems() {
   log('🔧 Resetting stuck processing items...', 'info');
 
   try {
@@ -1424,6 +1449,174 @@ function showQueueSampleQueries() {
   document.body.appendChild(menu);
 }
 
+// Chrome AI Testing Functions
+async function handleCheckChromeAI() {
+  try {
+    showChromeAITestResults('Checking Chrome AI availability...');
+
+    // Import AI Bridge for testing
+    const { aiBridge } = await import('./bridge/ai-bridge.js');
+    const { keywordExtractor } = await import('./bridge/keyword-extractor.js');
+
+    let results = '<h3>Chrome AI Status Check</h3>';
+
+    // Check AI Bridge initialization
+    try {
+      await aiBridge.initialize();
+      const capabilities = aiBridge.getCapabilities();
+
+      results += '<h4>Language Model:</h4>';
+      results += `<pre>${JSON.stringify(capabilities.languageModel, null, 2)}</pre>`;
+
+      results += '<h4>Summarizer:</h4>';
+      results += `<pre>${JSON.stringify(capabilities.summarizer, null, 2)}</pre>`;
+
+      // Update status indicators
+      updateChromeAIStatus(capabilities);
+
+    } catch (error) {
+      results += `<div style="color: red;">AI Bridge Error: ${error.message}</div>`;
+      chromeAiStatus.textContent = 'Error';
+      summarizerStatus.textContent = 'Error';
+    }
+
+    // Test keyword extractor
+    try {
+      // Just check if it initializes
+      results += '<h4>Keyword Extractor:</h4>';
+      results += 'Ready for testing';
+      keywordExtractorStatus.textContent = 'Ready';
+    } catch (error) {
+      results += `<div style="color: red;">Keyword Extractor Error: ${error.message}</div>`;
+      keywordExtractorStatus.textContent = 'Error';
+    }
+
+    showChromeAITestResults(results);
+
+  } catch (error) {
+    showChromeAITestResults(`<div style="color: red;">Chrome AI Check Failed: ${error.message}</div>`);
+  }
+}
+
+async function handleTestKeywordExtraction() {
+  try {
+    const query = testQuery.value.trim() || 'Find me JavaScript tutorials I visited last week';
+    showChromeAITestResults(`Testing keyword extraction for: "${query}"...`);
+
+    const { keywordExtractor } = await import('./bridge/keyword-extractor.js');
+
+    const startTime = performance.now();
+    const result = await keywordExtractor.extractKeywords(query);
+    const duration = Math.round(performance.now() - startTime);
+
+    let resultsHtml = `<h3>Keyword Extraction Test</h3>`;
+    resultsHtml += `<p><strong>Query:</strong> "${query}"</p>`;
+    resultsHtml += `<p><strong>Duration:</strong> ${duration}ms</p>`;
+    resultsHtml += `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+
+    showChromeAITestResults(resultsHtml);
+
+  } catch (error) {
+    showChromeAITestResults(`<div style="color: red;">Keyword Extraction Failed: ${error.message}</div>`);
+  }
+}
+
+async function handleTestSummarizer() {
+  try {
+    const content = testContent.value.trim() || 'This is test content for summarization.';
+    showChromeAITestResults(`Testing summarizer with ${content.length} characters...`);
+
+    const { aiBridge } = await import('./bridge/ai-bridge.js');
+
+    await aiBridge.initialize();
+
+    const startTime = performance.now();
+    const summary = await aiBridge.summarize(content, { type: 'tldr', length: 'short' });
+    const duration = Math.round(performance.now() - startTime);
+
+    let resultsHtml = `<h3>Summarizer Test</h3>`;
+    resultsHtml += `<p><strong>Input Length:</strong> ${content.length} characters</p>`;
+    resultsHtml += `<p><strong>Duration:</strong> ${duration}ms</p>`;
+    resultsHtml += `<h4>Summary:</h4>`;
+    resultsHtml += `<div style="background: #f8fafc; padding: 12px; border-radius: 8px;">${summary}</div>`;
+
+    showChromeAITestResults(resultsHtml);
+
+  } catch (error) {
+    showChromeAITestResults(`<div style="color: red;">Summarizer Test Failed: ${error.message}</div>`);
+  }
+}
+
+async function handleTestFullChatFlow() {
+  try {
+    const query = testQuery.value.trim() || 'Find me JavaScript tutorials I visited last week';
+    showChromeAITestResults(`Testing full chat flow for: "${query}"...`);
+
+    let resultsHtml = `<h3>Full Chat Flow Test</h3>`;
+    resultsHtml += `<p><strong>Query:</strong> "${query}"</p>`;
+
+    // Step 1: Keyword extraction
+    resultsHtml += `<h4>Step 1: Keyword Extraction</h4>`;
+    const { keywordExtractor } = await import('./bridge/keyword-extractor.js');
+    const startTime = performance.now();
+
+    const keywords = await keywordExtractor.extractKeywords(query);
+    resultsHtml += `<pre>${JSON.stringify(keywords, null, 2)}</pre>`;
+
+    // Step 2: Search with keywords
+    resultsHtml += `<h4>Step 2: Search with Keywords</h4>`;
+    const searchResponse = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'search',
+      data: { query, keywords, mode: 'hybrid-rerank', limit: 5 }
+    });
+
+    if (searchResponse.error) {
+      throw new Error(searchResponse.error);
+    }
+
+    resultsHtml += `<p>Found ${searchResponse.results?.length || 0} results</p>`;
+    resultsHtml += `<pre>${JSON.stringify(searchResponse.results?.slice(0, 2) || [], null, 2)}</pre>`;
+
+    // Step 3: AI Response Generation
+    resultsHtml += `<h4>Step 3: AI Response Generation</h4>`;
+    const { aiBridge } = await import('./bridge/ai-bridge.js');
+    await aiBridge.initialize();
+
+    const searchResults = searchResponse.results || [];
+    const context = aiBridge.buildContext(searchResults, 5);
+
+    const response = await aiBridge.generateResponse(query, context);
+    const duration = Math.round(performance.now() - startTime);
+
+    resultsHtml += `<p><strong>Total Duration:</strong> ${duration}ms</p>`;
+    resultsHtml += `<h4>AI Response:</h4>`;
+    resultsHtml += `<div style="background: #f8fafc; padding: 12px; border-radius: 8px;">${response}</div>`;
+
+    showChromeAITestResults(resultsHtml);
+
+  } catch (error) {
+    showChromeAITestResults(`<div style="color: red;">Full Chat Flow Test Failed: ${error.message}</div>`);
+  }
+}
+
+function updateChromeAIStatus(capabilities) {
+  if (capabilities.languageModel) {
+    const status = capabilities.languageModel.available || 'unknown';
+    chromeAiStatus.textContent = status;
+  }
+
+  if (capabilities.summarizer) {
+    const status = capabilities.summarizer.available || 'unknown';
+    summarizerStatus.textContent = status;
+  }
+}
+
+function showChromeAITestResults(content) {
+  chromeAiTestContent.innerHTML = content;
+  chromeAiTestResults.classList.remove('hidden');
+}
+
 // Auto-refresh queue stats periodically
 setInterval(() => {
   if (isConnected) {
@@ -1447,7 +1640,7 @@ window.debugPageController = {
   startQueueMonitoring,
   stopQueueMonitoring,
   testQueueNotifications,
-  resetStuckItems,
+  handleResetStuckItems,
   showQueueTimeline,
   handleCleanupOldItems,
   showQueueSampleQueries

@@ -143,6 +143,56 @@ CREATE TABLE IF NOT EXISTS pages (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Chat thread management for conversation persistence
+CREATE TABLE IF NOT EXISTS chat_thread (
+  id TEXT PRIMARY KEY DEFAULT ('thread_' || generate_random_uuid()),
+  name TEXT DEFAULT 'Untitled Conversation',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Chat message retention with FIFO eviction (200 message limit)
+CREATE TABLE IF NOT EXISTS chat_message (
+  id TEXT PRIMARY KEY DEFAULT ('msg_' || generate_random_uuid()),
+  thread_id TEXT NOT NULL REFERENCES chat_thread(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for efficient message retrieval by thread and chronological order
+CREATE INDEX IF NOT EXISTS idx_chat_message_thread_created
+  ON chat_message(thread_id, created_at);
+
+-- Trigger function for automatic FIFO eviction (keeps newest 200 messages per thread)
+CREATE OR REPLACE FUNCTION enforce_message_limit()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Delete oldest messages beyond 200 limit per thread
+  DELETE FROM chat_message
+  WHERE thread_id = NEW.thread_id
+    AND id NOT IN (
+      SELECT id FROM chat_message
+      WHERE thread_id = NEW.thread_id
+      ORDER BY created_at DESC
+      LIMIT 200
+    );
+
+  -- Update thread's last message timestamp
+  UPDATE chat_thread
+  SET last_message_at = NEW.created_at
+  WHERE id = NEW.thread_id;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to enforce 200-message FIFO limit automatically
+CREATE TRIGGER trig_enforce_message_limit
+  AFTER INSERT ON chat_message
+  FOR EACH ROW
+  EXECUTE FUNCTION enforce_message_limit();
+
 -- Create indexes for efficient search
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
 CREATE INDEX IF NOT EXISTS idx_pages_last_visit ON pages(last_visit_at DESC);
@@ -325,6 +375,162 @@ async function fullTextSearch(db, query, limit = 25) {
   `, [query, limit]);
 
   return result.rows;
+}
+```
+
+## Keyword-Enhanced Search for Chat
+
+The chat interface uses a two-stage search process: keyword extraction followed by enhanced search with filtering.
+
+```javascript
+// Enhanced search with keyword filtering and boosting
+async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 25) {
+  const {
+    keywords = [],
+    phrases = [],
+    must_include = [],
+    must_exclude = []
+  } = extractedKeywords;
+
+  // Combine all terms for embedding
+  const searchTerms = [...keywords, ...phrases];
+  const searchText = searchTerms.length > 0 ? searchTerms.join(' ') : originalQuery;
+
+  // Generate embedding for search terms
+  const embedding = await embedder(searchText);
+
+  // Build enhanced WHERE clause for keyword filtering
+  let whereClause = '1=1';
+  const params = [];
+  let paramIndex = 1;
+
+  // Must include terms (boost scoring)
+  if (must_include.length > 0) {
+    const includeConditions = must_include.map(term => {
+      params.push(`%${term.toLowerCase()}%`);
+      return `(LOWER(title) LIKE $${paramIndex++} OR LOWER(content_text) LIKE $${paramIndex-1})`;
+    });
+    whereClause += ` AND (${includeConditions.join(' OR ')})`;
+  }
+
+  // Must exclude terms (filter out)
+  if (must_exclude.length > 0) {
+    const excludeConditions = must_exclude.map(term => {
+      params.push(`%${term.toLowerCase()}%`);
+      return `(LOWER(title) NOT LIKE $${paramIndex++} AND LOWER(content_text) NOT LIKE $${paramIndex-1})`;
+    });
+    whereClause += ` AND ${excludeConditions.join(' AND ')}`;
+  }
+
+  // Vector similarity search with keyword filtering
+  const embeddingArray = `[${Array.from(embedding.data).join(',')}]`;
+  params.push(embeddingArray, limit);
+
+  const vectorResults = await db.query(`
+    SELECT
+      id, url, title, domain, content_text, summary,
+      last_visit_at, visit_count,
+      1 - (embedding <=> $${paramIndex}::vector) AS similarity
+    FROM pages
+    WHERE embedding IS NOT NULL AND ${whereClause}
+    ORDER BY embedding <=> $${paramIndex}::vector
+    LIMIT $${paramIndex + 1}
+  `, params);
+
+  // Apply keyword boosting to results
+  return vectorResults.rows.map(result => {
+    let boost = 0;
+
+    // Boost for must_include terms in title
+    const titleLower = result.title?.toLowerCase() || '';
+    must_include.forEach(term => {
+      if (titleLower.includes(term.toLowerCase())) boost += 0.15;
+    });
+
+    // Boost for extracted keywords and phrases
+    [...keywords, ...phrases].forEach(term => {
+      if (titleLower.includes(term.toLowerCase())) boost += 0.1;
+    });
+
+    return {
+      ...result,
+      similarity: Math.min(1, result.similarity + boost),
+      matchedKeywords: [...keywords, ...phrases, ...must_include]
+        .filter(term => titleLower.includes(term.toLowerCase()))
+    };
+  }).sort((a, b) => b.similarity - a.similarity);
+}
+
+// Browser history search with keyword filtering
+async function getBrowserHistoryWithKeywords(extractedKeywords, originalQuery, limit = 100) {
+  const { must_include = [], must_exclude = [] } = extractedKeywords;
+
+  // Search Chrome history with original query
+  const historyResults = await chrome.history.search({
+    text: originalQuery,
+    startTime: Date.now() - (90 * 24 * 60 * 60 * 1000), // 90 days
+    maxResults: 1000
+  });
+
+  // Apply keyword filtering
+  return historyResults.filter(item => {
+    const searchText = `${item.title} ${item.url}`.toLowerCase();
+
+    // Must include at least one required term
+    if (must_include.length > 0) {
+      const hasRequired = must_include.some(term =>
+        searchText.includes(term.toLowerCase())
+      );
+      if (!hasRequired) return false;
+    }
+
+    // Must not include any excluded terms
+    if (must_exclude.length > 0) {
+      const hasExcluded = must_exclude.some(term =>
+        searchText.includes(term.toLowerCase())
+      );
+      if (hasExcluded) return false;
+    }
+
+    return true;
+  }).slice(0, limit);
+}
+```
+
+## Chat Message Persistence
+
+The chat system stores conversation history in PGlite with automatic FIFO eviction:
+
+```javascript
+// Store chat message with automatic thread management
+async function storeChatMessage(db, threadId, role, content) {
+  // Create thread if it doesn't exist
+  await db.query(`
+    INSERT INTO chat_thread (id) VALUES ($1)
+    ON CONFLICT (id) DO NOTHING
+  `, [threadId]);
+
+  // Insert message (trigger automatically handles FIFO eviction)
+  const result = await db.query(`
+    INSERT INTO chat_message (thread_id, role, content)
+    VALUES ($1, $2, $3)
+    RETURNING id, created_at
+  `, [threadId, role, content]);
+
+  return result.rows[0];
+}
+
+// Retrieve recent messages for session context (last 10 exchanges = 20 messages)
+async function getRecentMessagesForSession(db, threadId, limit = 20) {
+  const result = await db.query(`
+    SELECT role, content, created_at
+    FROM chat_message
+    WHERE thread_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2
+  `, [threadId, limit]);
+
+  return result.rows.reverse(); // Chronological order for session context
 }
 ```
 

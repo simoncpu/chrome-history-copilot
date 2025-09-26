@@ -1,7 +1,7 @@
 # Technical Challenges with Transformers.js in Chrome Extension
 
 ## Overview
-This document details the technical challenges encountered when integrating Transformers.js into a Chrome Extension Manifest V3 environment with SQLite WASM and sqlite-vec for vector embeddings.
+This document details the technical challenges encountered when integrating Transformers.js into a Chrome Extension Manifest V3 environment with PGlite and pgvector for vector embeddings.
 
 Policy note (local‑first, optional remote):
 - The extension is local‑first. We bundle a small quantized model for embeddings and load it from `lib/models/`.
@@ -142,7 +142,7 @@ const modelPath = chrome.runtime.getURL('models/');
 chrome.offscreen.createDocument({
   url: 'offscreen.html',
   reasons: ['IFRAME_SCRIPTING'],
-  justification: 'SQLite and embedding operations'
+  justification: 'PGlite and embedding operations'
 });
 ```
 - **Efficient Serialization**: Float32Array embeddings properly serialized in messages
@@ -153,7 +153,7 @@ chrome.offscreen.createDocument({
 ### 1. Embedding Quality
 - **Model Performance**: all-MiniLM-L6-v2 generated high-quality 384-dimensional embeddings
 - **Consistency**: Consistent embedding generation across different text inputs
-- **Vector Compatibility**: Embeddings worked seamlessly with sqlite-vec JSON format
+- **Vector Compatibility**: Embeddings worked seamlessly with pgvector PostgreSQL array format
 
 ### 2. Local-First Architecture
 - **No Runtime Dependencies**: All dependencies bundled locally eliminated network dependency

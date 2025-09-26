@@ -160,6 +160,13 @@ CREATE TABLE IF NOT EXISTS chat_message (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Chat message embeddings for semantic search within conversation history
+CREATE TABLE IF NOT EXISTS chat_message_embedding (
+  message_id TEXT PRIMARY KEY REFERENCES chat_message(id) ON DELETE CASCADE,
+  embedding vector(384),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Index for efficient message retrieval by thread and chronological order
 CREATE INDEX IF NOT EXISTS idx_chat_message_thread_created
   ON chat_message(thread_id, created_at);
@@ -203,6 +210,11 @@ CREATE INDEX IF NOT EXISTS idx_pages_visit_count ON pages(visit_count DESC);
 CREATE INDEX IF NOT EXISTS idx_pages_embedding_cosine
   ON pages USING ivfflat (embedding vector_cosine_ops)
   WITH (lists = 100);  -- For cosine distance searches
+
+-- Chat message embeddings vector index for conversation search
+CREATE INDEX IF NOT EXISTS idx_chat_message_embedding_cosine
+  ON chat_message_embedding USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 10);  -- Smaller list count for chat messages
 
 -- Alternative indexes for other distance metrics
 -- CREATE INDEX idx_pages_embedding_l2
@@ -785,27 +797,6 @@ async function searchWithFallback(db, query, embedding, mode) {
 }
 ```
 
-## Migration from SQLite
-
-For existing SQLite databases, provide a migration path:
-
-```javascript
-async function migrateFromSQLite(sqliteDb, pgliteDb) {
-  // Export from SQLite
-  const pages = await sqliteDb.exec(`
-    SELECT p.*, e.embedding
-    FROM pages p
-    LEFT JOIN page_embeddings e ON p.id = e.id
-  `);
-
-  // Batch insert into PGlite
-  for (const batch of chunk(pages, 100)) {
-    await batchInsertPages(pgliteDb, batch);
-  }
-
-  console.log(`[DB] Migrated ${pages.length} pages to PGlite`);
-}
-```
 
 ## Testing and Validation
 

@@ -29,7 +29,7 @@ See also: technical_challenges_pglite.md, technical_challenges_transformer.md, t
 - Offscreen document: runs heavy/long‑lived tasks (PGlite + pgvector, PostgreSQL full-text search, Transformers.js embeddings, optional reranker) and exposes a request/response bridge.
 - UI (side panel): two HTML pages, separate JS controllers sharing a thin client to the offscreen services.
 - Storage: PGlite database stored in IndexedDB. Preferences in `chrome.storage.local`.
-- Chrome AI: `window.ai.languageModel` (Prompt), `window.ai.summarizer` (optional per‑page summary generation).
+- Chrome AI: Chrome 138+ global APIs `LanguageModel` (Prompt), `Summarizer` (optional per‑page summary generation) with fallback to legacy `window.ai` APIs.
 
 
 ## Manifest and Permissions (MV3)
@@ -40,18 +40,17 @@ See also: technical_challenges_pglite.md, technical_challenges_transformer.md, t
 - `action.default_icon`: same mapping as `icons`.
 - `side_panel.default_path`: `history_search.html`
 - `background.service_worker`: `background.js`
-- `permissions`: `history`, `sidePanel`, `storage`, `scripting`, `tabs`, `activeTab`, `contextMenus`, `offscreen`
-- `host_permissions`: `https://*/*`, `http://*/*` (needed to extract page content + favicons)
-- `web_accessible_resources`:
-  - PGlite files: `lib/pglite.js` (and any required WASM/worker files)
-  - ONNX/Transformers.js assets: `lib/transformers.min.js`, `lib/ort-wasm.wasm`, `lib/ort-wasm-simd-threaded.wasm`
-  - Suggested manifest snippet:
-    - `"web_accessible_resources": [{ "resources": ["lib/*.wasm", "lib/transformers.min.js", "lib/pglite.js"], "matches": ["<all_urls>"] }]`
+- `permissions`: `history`, `sidePanel`, `storage`, `scripting`, `tabs`, `activeTab`, `contextMenus`, `offscreen`, `webNavigation`
+- `optional_host_permissions`: `https://*/*`, `http://*/*` (needed to extract page content + favicons)
+- `content_scripts`: Automatic content extraction script that runs on all HTTP/HTTPS pages at `document_idle`
+- `web_accessible_resources`: All library files including WASM, data files, and models
+  - `"resources": ["lib/*.wasm", "lib/*.data", "lib/*.js", "lib/*.tar.gz", "lib/vector/**", "lib/models/**"]`
+  - `"matches": ["<all_urls>"]`
 - `content_security_policy.extension_pages` should allow model fetch hosts (if any) used by Transformers.js (e.g., huggingface.co) only as needed. Keep CSP minimal and explicit. Example:
   - `"content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://hf.co https://*.hf.co https://cdn.jsdelivr.net;" }`
 
 
-## Directory Layout (target)
+## Directory Layout (actual)
 
 - chrome-extension/
   - manifest.json
@@ -66,22 +65,21 @@ See also: technical_challenges_pglite.md, technical_challenges_transformer.md, t
     - history_chat.html
     - history_chat.js
     - styles.css
-    - assets/ (icons, loader svg/gifs)
   - debug.html
   - debug.js
+  - content-extractor.js (content script for page text extraction)
   - lib/
     - pglite.js (with pgvector extension included)
-    - Any PGlite worker/WASM files as needed
+    - PGlite WASM files and chunks
     - transformers.min.js and ONNX runtime artifacts: ort-wasm.wasm, ort-wasm-simd-threaded.wasm
-
-Bundled libraries are present under `chrome-extension/lib/` in this repo.
-  - db/
-    - schema.sql (documentation/reference; schema created in code)
-    - migrations/ (if needed later)
+    - models/ (local embedding model files)
   - bridge/
     - db-bridge.js (request/response client used by UI)
     - ai-bridge.js (Prompt + Summarizer utilities)
     - keyword-extractor.js (Chrome AI keyword extraction service)
+    - chrome-ai-loader.js (Chrome AI detection and session management)
+
+Bundled libraries are present under `chrome-extension/lib/` in this repo.
 
 Re‑use and adapt working patterns/code as documented in:
 - technical_challenges_pglite.md (embedding, vector search with pgvector, PostgreSQL full-text search, hybrid + rerank, RRF)
@@ -92,7 +90,7 @@ Re‑use and adapt working patterns/code as documented in:
 ## Recent Implementation Updates (January 2025)
 
 ### Chrome AI Integration Complete
-- **Full Chrome 138+ API Support**: Integrated `window.ai.languageModel` and `window.ai.summarizer` with proper session management, `initialPrompts`, and `append()` context injection
+- **Full Chrome 138+ API Support**: Integrated global `LanguageModel` and `Summarizer` APIs with proper session management, `initialPrompts`, and `append()` context injection
 - **No Fallbacks Strategy**: Extension requires Chrome AI availability; fails gracefully with clear error messages if APIs are unavailable
 - **Keyword Extraction Service**: New `keyword-extractor.js` uses Chrome AI with JSON Schema `responseConstraint` for structured query analysis
 - **Session Quota Tracking**: Implemented `inputUsage` vs `inputQuota` monitoring with automatic session recreation
@@ -201,12 +199,12 @@ Performance/UX
 
 Stage 1 — Candidate Generation (Hybrid):
 - Run PostgreSQL full-text search using tsquery and vector similarity search using pgvector's cosine distance operators.
-- Take top K1 (FTS5) and top K2 (vector). Merge via RRF or weighted union to produce ~K candidates (e.g., 150–200).
+- Take top K1 (PostgreSQL FTS) and top K2 (vector). Merge via RRF or weighted union to produce ~K candidates (e.g., 150–200).
   - RRF score per list with `k = 60` (tunable), `rrf = 1/(k + rank)`.
 
 Stage 2 — Reranking:
 - For merged candidates, compute a hybrid score and apply a lightweight reranker:
-  - Base score = `w_vec * cosine + w_bm25 * bm25_norm`
+  - Base score = `w_vec * cosine + w_text * text_rank_norm`
   - Add recency and popularity features: `+ w_recency * recencyBoost + w_visits * visitBoost`
   - Optionally apply a cross‑encoder reranker from Transformers.js when device allows (guarded by a setting; see technical_challenges_transformer.md). Fallback to base score if reranker unavailable.
 - Return top N (e.g., 20–50) with full metadata.
@@ -218,7 +216,7 @@ Advanced Modes (user‑selectable in UI’s Advanced panel):
 
 Normalization & Scoring
 - Normalize ts_rank scores and cosine similarities to [0, 1] (e.g., z‑score or min‑max per candidate set) before weighted sum.
-- Suggested defaults: `w_vec=0.5, w_bm25=0.3, w_recency=0.1, w_visits=0.1` (tune as needed).
+- Suggested defaults: `w_vec=0.5, w_text=0.3, w_recency=0.1, w_visits=0.1` (tune as needed).
 
 
 ## Browser History Integration
@@ -255,14 +253,14 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 - Chat interface, simple transcript; trim context pragmatically when it grows too large (e.g., keep last ~10–12 turns, or token budget ~4–8k where possible).
 - On submit:
   - Retrieve candidates using the same Hybrid+Rerank pipeline.
-  - Prompt `window.ai.languageModel` with system instructions that force link inclusion.
+  - Prompt Chrome AI (global `LanguageModel` API) with system instructions that force link inclusion.
   - Render answer with clickable links to top relevant pages and short rationales. Use an ellipsis loader while generating.
 - If LLM unavailable, fall back to a structured response builder that lists the top results with links and snippets.
 
 
 ## Prompt API Usage (Chat)
 
-- Create session with `window.ai.languageModel.create()`. Prefer on‑device model in Canary if available; otherwise respect user settings before any network use.
+- Create session with Chrome 138+ `LanguageModel.create()` or legacy `window.ai.languageModel.create()`. Prefer on‑device model in Canary if available; otherwise respect user settings before any network use.
 - System prompt should:
   - Instruct model to answer based on provided history snippets only.
   - Require inclusion of links for top results.
@@ -284,7 +282,7 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
   - Troubleshooting guide for "Receiving end does not exist" errors
 
 - **Chrome AI Integration Testing**:
-  - Real-time Chrome AI availability detection (`window.ai.languageModel`, `window.ai.summarizer`)
+  - Real-time Chrome AI availability detection (Chrome 138+ global APIs with legacy fallback)
   - Interactive keyword extraction testing with JSON Schema validation
   - Summarizer API testing with content input and progress monitoring
   - **Full chat search flow testing using production functions from `history_chat.js`**
@@ -446,7 +444,7 @@ async function answerQuery(query) {
   const prompt = `${sys}\n\nUser question: ${query}\n\nItems:\n${ctx}`;
 
   try {
-    const session = await window.ai.languageModel.create();
+    const session = await createLanguageSession(); // Uses Chrome 138+ API with fallback
     const text = await session.prompt(prompt);
     return text;
   } catch (e) {
@@ -476,13 +474,24 @@ async function answerQuery(query) {
 - If `aiPrefs.enableRemoteWarm` is true, offscreen may fetch the larger model over HTTPS and cache it, then hot‑swap. Extension URLs are not cached (Cache API does not support chrome‑extension://).
 
 
+## Implemented Features (January 2025)
+
+- **Chat Message Retention**: PGlite-based chat_thread and chat_message tables with automatic FIFO eviction (200 message limit)
+- **Keyword Extraction Service**: Chrome AI-powered keyword extraction with JSON Schema responseConstraint for structured output
+- **AI Summarization Queue**: Database-backed queue system with LISTEN/NOTIFY for real-time processing, replacing polling architecture
+- **Browser History Integration**: 90-day retention with merged PGlite/Chrome history results and deduplication
+- **Enhanced Debug Interface**: Comprehensive testing tools for Chrome AI integration, queue management, and database operations
+- **Content Extraction**: Automatic content extraction via content scripts on page navigation
+- **Two-Stage Chat Search**: Keyword extraction → enhanced search with semantic boosting → context-aware AI responses
+
+
 ## Future Work (Non‑blocking)
 
 - **Automatic 90-day retention policy**: Implement background cleanup job using Chrome alarms API to automatically prune PGlite database entries older than 90 days
 - Chunk‑level embeddings for long pages.
 - On‑device cross‑encoder reranker improvements or knowledge distillation for speed.
 - Per‑domain ranking features; personalization toggles.
-- Rich snippets (key passages) with window.ai.summarizer.
+- Rich snippets (key passages) with Chrome AI Summarizer.
 
 
 ## Guardrails for Contributors
@@ -492,7 +501,7 @@ async function answerQuery(query) {
 - Keep UI minimal and fast; side panel only. No separate full‑tab UI unless explicitly requested.
 - Re‑use the approaches documented in the local technical_challenges_* docs; avoid reinventing.
 - When in doubt, prefer local‑first, offline‑first behavior.
-- update @chrome-extension/debug.html to show sql queries or things that the chrome extension actually uses
+- Update @chrome-extension/debug.html to show SQL queries or things that the chrome extension actually uses
 - Ignore folders that are named prototype_*/ unless explicitly referenced.
-- Some code might still contain assumption that was left when we still used sqlite-wasm and sqlite-vec. Do not use that assumption. New assumption is that we're now using pglite with pgvector.
+- This extension uses PGlite with pgvector for all database operations. All code should reflect this architecture.
 - Do not read the WASM pglite library when debugging because it's too large. Browse online documentation instead. Show that you require more information so that I can assist.

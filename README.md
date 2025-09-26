@@ -23,7 +23,7 @@ The extension uses modern AI techniques to understand the meaning and context of
 
 - **Captures** your browser history automatically as you browse
 - **Indexes** page content using both traditional keyword search and AI embeddings for semantic understanding
-- **Stores** everything locally using SQLite with vector storage capabilities
+- **Stores** everything locally using PGlite (PostgreSQL in WASM) with pgvector for vector similarity search
 - **Searches** using hybrid retrieval that combines the best of keyword matching and AI similarity
 - **Answers** questions about your history using Chrome's on-device AI (Chrome Canary required)
 

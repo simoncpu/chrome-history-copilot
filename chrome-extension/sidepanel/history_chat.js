@@ -17,6 +17,8 @@ let advancedPanelChat;
 let toggleRemoteWarmChat;
 let modelStatusChat;
 let processingStatusChat;
+let aiInitStatus;
+let aiInitText;
 
 // State
 let isGenerating = false;
@@ -47,6 +49,8 @@ function initializeChatPage() {
   toggleRemoteWarmChat = document.getElementById('toggleRemoteWarmChat');
   modelStatusChat = document.getElementById('modelStatusChat');
   processingStatusChat = document.getElementById('processingStatusChat');
+  aiInitStatus = document.getElementById('aiInitStatus');
+  aiInitText = document.getElementById('aiInitText');
 
   if (!chatMessages || !chatInput) {
     console.error('[CHAT] Required DOM elements not found');
@@ -276,7 +280,7 @@ async function generateResponse(userMessage) {
   } catch (error) {
     console.error('[CHAT] Failed to generate response:', error);
     hideChatLoading();
-    addErrorMessage('Sorry, I encountered an error while processing your request. Please try again.');
+    addErrorMessage(`AI Error: ${error.message}. Please ensure Chrome AI is properly configured.`);
   } finally {
     isGenerating = false;
     updateUI();
@@ -309,19 +313,14 @@ async function searchHistory(query) {
 }
 
 async function generateAIResponse(userMessage, searchResults) {
-  try {
-    await aiBridge.initialize();
-    if (aiBridge.isReady()) {
-      console.log('[CHAT] Using Chrome AI for response generation');
-      return await generateWithChromeAI(userMessage, searchResults);
-    }
-  } catch (error) {
-    console.log('[CHAT] Chrome AI unavailable, using fallback:', error.message);
+  await aiBridge.initialize();
+
+  if (!aiBridge.isReady()) {
+    throw new Error('Chrome AI is not available - ensure Chrome Canary with AI flags enabled');
   }
 
-  // Fallback: structured response without AI
-  console.log('[CHAT] Generating fallback response');
-  return generateFallbackResponse(userMessage, searchResults);
+  console.log('[CHAT] Using Chrome AI for response generation');
+  return await generateWithChromeAI(userMessage, searchResults);
 }
 
 async function generateWithChromeAI(userMessage, searchResults) {
@@ -373,43 +372,6 @@ function buildChatTurnsContext(maxTurns = 10, maxChars = 2000) {
   return buf;
 }
 
-// Fallback response generation when Chrome AI is unavailable
-function generateFallbackResponse(userMessage, searchResults) {
-  if (searchResults.length === 0) {
-    return `I couldn't find any pages in your browsing history that match your query: "${userMessage}"\n\nTry different keywords or check if the pages you're looking for have been visited recently.`;
-  }
-
-  const resultCount = searchResults.length;
-  let response = `**Found ${resultCount} relevant page${resultCount > 1 ? 's' : ''} in your browsing history:**\n\n`;
-
-  searchResults.slice(0, 5).forEach((result, i) => {
-    const title = result.title || 'Untitled';
-    const url = result.url;
-    let snippet = '';
-
-    if (result.summary) {
-      snippet = result.summary;
-    } else if (result.snippet) {
-      snippet = result.snippet;
-    } else if (result.content_text) {
-      snippet = result.content_text.substring(0, 150) + '...';
-    }
-
-    response += `**${i + 1}. [${title}](${url})**\n`;
-    if (snippet) {
-      response += `${snippet}\n`;
-    }
-    response += '\n';
-  });
-
-  if (resultCount > 5) {
-    response += `*...and ${resultCount - 5} more results*\n\n`;
-  }
-
-  response += '*Note: Enhanced AI responses are currently unavailable. The above results are from your browsing history search.*';
-
-  return response;
-}
 
 function addAssistantMessage(content, searchResults = []) {
   const messageDiv = document.createElement('div');
@@ -496,6 +458,37 @@ function hideChatLoading() {
   chatLoading.classList.add('hidden');
 }
 
+function showAIInitLoading(message = 'Initializing AI system...') {
+  if (aiInitStatus && aiInitText) {
+    aiInitText.textContent = message;
+    aiInitStatus.classList.remove('hidden');
+  }
+
+  // Disable chat input while initializing
+  if (chatInput) {
+    chatInput.disabled = true;
+    chatInput.placeholder = 'Initializing AI...';
+  }
+  if (sendButton) {
+    sendButton.disabled = true;
+  }
+}
+
+function hideAIInitLoading() {
+  if (aiInitStatus) {
+    aiInitStatus.classList.add('hidden');
+  }
+
+  // Re-enable chat input
+  if (chatInput) {
+    chatInput.disabled = false;
+    chatInput.placeholder = 'Ask about your browsing history...';
+  }
+  if (sendButton && !isGenerating) {
+    sendButton.disabled = false;
+  }
+}
+
 function updateUI() {
   if (isGenerating) {
     sendButton.disabled = true;
@@ -518,30 +511,84 @@ function scrollToBottom(retries = 2) {
 
 // AI initialization
 async function initializeAI() {
+  // Show loading immediately
+  showAIInitLoading('Initializing Chrome AI...');
+
   try {
     const caps = await aiBridge.initialize();
 
-    // Handle both Chrome 138+ format and legacy format
-    if (caps?.languageModel?.ready || caps?.languageModel?.available === 'readily') {
+    // Check availability - Chrome AI is expected to be available
+    if (caps?.languageModel?.ready || caps?.languageModel?.available === 'readily' || caps?.languageModel?.available === 'available') {
       statusText.textContent = 'AI ready';
       console.log('[CHAT] Chrome AI initialized successfully');
-    } else if (caps?.languageModel?.available === 'available') {
-      statusText.textContent = 'AI ready';
-      console.log('[CHAT] Chrome AI available (138+ format)');
-    } else if (caps?.languageModel?.available) {
-      statusText.textContent = `AI status: ${caps.languageModel.available}`;
-      console.log('[CHAT] Chrome AI status:', caps.languageModel.available);
-    } else if (caps?.available === false) {
-      statusText.textContent = 'Chat ready (enhanced mode unavailable)';
-      console.log('[CHAT] Chrome AI not available, fallback mode enabled');
+      hideAIInitLoading();
+    } else if (caps?.languageModel?.available === 'downloadable') {
+      statusText.textContent = 'AI ready (downloading model...)';
+      console.log('[CHAT] Chrome AI model downloadable, ready to use');
+      showAIInitLoading('Downloading AI model...');
+
+      // Hide loader after a delay to show model is ready to use even while downloading
+      setTimeout(() => {
+        hideAIInitLoading();
+      }, 2000);
+    } else if (caps?.languageModel?.available === 'downloading') {
+      statusText.textContent = 'AI downloading model...';
+      console.log('[CHAT] Chrome AI model downloading');
+      showAIInitLoading('Downloading AI model...');
+
+      // Poll for completion
+      pollForAIReadiness();
     } else {
-      statusText.textContent = 'Checking AI capabilities...';
+      statusText.textContent = `AI status: ${caps?.languageModel?.available || 'unavailable'}`;
+      console.log('[CHAT] Chrome AI status:', caps?.languageModel?.available);
+      hideAIInitLoading();
     }
   } catch (error) {
-    console.warn('[CHAT] AI initialization error (non-fatal):', error);
-    statusText.textContent = 'Chat ready (enhanced mode unavailable)';
-    // Don't throw - allow chat to work without AI
+    console.error('[CHAT] AI initialization failed:', error);
+    statusText.textContent = 'AI initialization failed - check Chrome AI configuration';
+    hideAIInitLoading();
+    throw error; // Fail initialization if Chrome AI is not available
   }
+}
+
+// Poll for AI readiness when downloading
+async function pollForAIReadiness() {
+  const maxAttempts = 60; // Poll for up to 2 minutes
+  let attempts = 0;
+
+  const checkReadiness = async () => {
+    attempts++;
+    try {
+      const caps = await aiBridge.initialize();
+
+      if (caps?.languageModel?.ready || caps?.languageModel?.available === 'available' || caps?.languageModel?.available === 'readily') {
+        // AI is ready
+        statusText.textContent = 'AI ready';
+        console.log('[CHAT] Chrome AI download completed');
+        hideAIInitLoading();
+        return;
+      }
+
+      if (attempts < maxAttempts && caps?.languageModel?.available === 'downloading') {
+        // Still downloading, check again in 2 seconds
+        setTimeout(checkReadiness, 2000);
+      } else {
+        // Either completed with different status or timeout
+        console.log('[CHAT] AI polling stopped:', caps?.languageModel?.available);
+        statusText.textContent = `AI status: ${caps?.languageModel?.available || 'unavailable'}`;
+        hideAIInitLoading();
+      }
+    } catch (error) {
+      console.error('[CHAT] Error polling AI readiness:', error);
+      if (attempts < maxAttempts) {
+        setTimeout(checkReadiness, 2000);
+      } else {
+        hideAIInitLoading();
+      }
+    }
+  };
+
+  setTimeout(checkReadiness, 2000); // Start polling after initial delay
 }
 
 async function loadChatPrefs() {
@@ -747,7 +794,6 @@ async function checkQueueStatus() {
     ]);
 
     if (summaryResponse?.stats || ingestionResponse) {
-      const summaryStats = summaryResponse?.stats || {};
       const ingestionStats = ingestionResponse || {};
 
       // Only show progress for ingestion work, not summarization
@@ -807,16 +853,10 @@ function enableChatInput() {
   }
 }
 
-// Additional escape function to avoid conflicts
-function escapeHtmlChat(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
 
 // Real-time status update listener
 function setupStatusUpdateListener() {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'status_update') {
       handleStatusUpdate(message.event, message.data);
     }

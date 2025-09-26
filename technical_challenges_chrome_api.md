@@ -442,19 +442,99 @@ As of the latest implementation (December 2024):
 - ✅ Chrome 138+ global API support (`LanguageModel`, `Summarizer`)
 - ✅ Legacy `window.ai` API fallback for older Chrome versions
 - ✅ Proper availability checking using `LanguageModel.availability()`
-- ✅ Comprehensive error handling with graceful fallback
 - ✅ User activation requirements respected
 - ✅ Input size limiting and retry logic in place
 - ✅ Session management with error recovery
-- ✅ Complete fallback functionality when AI unavailable
-- ✅ Clear user feedback about AI availability status
+- ✅ Clear error messages when AI unavailable
+- ✅ Simplified architecture assuming Chrome AI availability
+- ⚠️ **REMOVED: Fallback functionality** - Extension now assumes Chrome AI is available
+
+## Architecture Simplification (2025 Update)
+
+Following the principle of assuming Chrome AI availability, the codebase has been simplified:
+
+### Removed Components
+- **Fallback response generation**: No longer generates structured responses when AI unavailable
+- **Graceful degradation logic**: Extension fails fast when Chrome AI not available
+- **Availability tolerance**: Extension expects Chrome AI to be properly configured
+- **Complex error handling**: Simplified to Chrome AI-specific error messages
+
+### Updated Error Handling
+```javascript
+// Before - with fallback
+async function generateResponse(userMessage, searchResults) {
+  try {
+    if (aiBridge.isReady()) {
+      return await generateWithChromeAI(userMessage, searchResults);
+    }
+  } catch (error) {
+    console.log('Chrome AI unavailable, using fallback:', error.message);
+  }
+  return generateFallbackResponse(userMessage, searchResults);
+}
+
+// After - assuming availability
+async function generateAIResponse(userMessage, searchResults) {
+  await aiBridge.initialize();
+
+  if (!aiBridge.isReady()) {
+    throw new Error('Chrome AI is not available - ensure Chrome Canary with AI flags enabled');
+  }
+
+  return await generateWithChromeAI(userMessage, searchResults);
+}
+```
+
+### Simplified Initialization
+```javascript
+// Before - tolerant of AI unavailability
+async function initializeAI() {
+  try {
+    const caps = await aiBridge.initialize();
+    // Complex availability checking with fallback states
+  } catch (error) {
+    console.warn('AI initialization error (non-fatal):', error);
+    statusText.textContent = 'Chat ready (enhanced mode unavailable)';
+    // Don't throw - allow chat to work without AI
+  }
+}
+
+// After - expects AI to be available
+async function initializeAI() {
+  try {
+    const caps = await aiBridge.initialize();
+    if (caps?.languageModel?.ready || caps?.languageModel?.available === 'available') {
+      statusText.textContent = 'AI ready';
+    } else {
+      statusText.textContent = `AI status: ${caps?.languageModel?.available || 'unavailable'}`;
+    }
+  } catch (error) {
+    console.error('AI initialization failed:', error);
+    statusText.textContent = 'AI initialization failed - check Chrome AI configuration';
+    throw error; // Fail initialization if Chrome AI is not available
+  }
+}
+```
+
+### Benefits of Simplified Architecture
+- **Reduced Complexity**: Cleaner codebase with fewer conditional branches
+- **Clear Error Messages**: Users get specific guidance about Chrome AI configuration
+- **Faster Development**: No need to maintain parallel fallback logic
+- **Better Testing**: Easier to test with single AI code path
+- **Predictable Behavior**: Extension always behaves consistently with AI
+
+### Trade-offs
+- **Hard Dependencies**: Extension completely depends on Chrome AI availability
+- **No Graceful Degradation**: Extension fails if Chrome AI not configured
+- **User Setup Requirements**: Users must properly configure Chrome Canary with AI flags
 
 ## Future Considerations
 
 1. **API Stability**: Monitor Chrome AI API changes as they move from experimental to stable
 2. **Performance**: Optimize for quota usage and response times
-3. **Fallbacks**: Consider alternative AI providers if Chrome AI becomes unavailable
-4. **User Experience**: Better user feedback when AI operations fail or are unavailable
+3. **User Setup**: Provide better guidance for Chrome AI configuration
+4. **Error Recovery**: Implement retry mechanisms for transient AI failures
+5. **Session Management**: Optimize session lifecycle and resource usage
 
 ## Reference Implementation
 

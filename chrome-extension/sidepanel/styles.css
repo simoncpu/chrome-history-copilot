@@ -470,6 +470,55 @@ body::before {
   }
 }
 
+/* AI Initialization Status */
+.ai-init-status {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.ai-init-content {
+  text-align: center;
+  max-width: 300px;
+  padding: 24px;
+}
+
+.ai-init-loader {
+  height: 3px;
+  width: 200px;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 0 auto 16px;
+}
+
+.ai-init-loader .loading-bar {
+  height: 100%;
+  background: linear-gradient(90deg,
+    var(--primary-color) 0%,
+    rgba(125, 211, 252, 0.8) 50%,
+    var(--primary-color) 100%);
+  width: 30%;
+  border-radius: 2px;
+  position: relative;
+  animation: indeterminateBar 1.5s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+}
+
+.ai-init-text {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

@@ -17,15 +17,51 @@ export class AIBridge {
   async initialize() {
     if (this.isInitialized) return this.capabilities;
 
-    // Strict: require Chrome AI Language Model to be available
-    if (!window.ai || !window.ai.languageModel) {
-      throw new Error('Chrome AI languageModel not available');
+    // Check for Chrome 138+ global APIs first
+    const hasLanguageModel = typeof LanguageModel !== 'undefined';
+    const hasSummarizer = typeof Summarizer !== 'undefined';
+
+    // Fallback to window.ai for older implementations
+    const hasLegacyAPI = window.ai?.languageModel || window.ai?.summarizer;
+
+    if (!hasLanguageModel && !hasLegacyAPI) {
+      console.warn('[AI-BRIDGE] No Chrome AI APIs available - chat will use fallback mode');
+      this.capabilities = { available: false };
+      this.isInitialized = true;
+      return this.capabilities;
     }
 
-    this.capabilities = {
-      languageModel: await window.ai.languageModel.capabilities(),
-      summarizer: window.ai.summarizer ? await window.ai.summarizer.capabilities() : null
-    };
+    try {
+      // Check availability properly for Chrome 138+ APIs
+      if (hasLanguageModel) {
+        const langAvailability = await LanguageModel.availability();
+        const summAvailability = hasSummarizer ? await Summarizer.availability() : 'unavailable';
+
+        this.capabilities = {
+          languageModel: {
+            available: langAvailability,
+            ready: langAvailability === 'available'
+          },
+          summarizer: hasSummarizer ? {
+            available: summAvailability,
+            ready: summAvailability === 'available'
+          } : null
+        };
+        console.log('[AI-BRIDGE] Chrome 138+ APIs detected:', langAvailability, summAvailability);
+      } else if (hasLegacyAPI) {
+        // Handle legacy window.ai
+        this.capabilities = {
+          languageModel: window.ai.languageModel ?
+            await window.ai.languageModel.capabilities() : null,
+          summarizer: window.ai.summarizer ?
+            await window.ai.summarizer.capabilities() : null
+        };
+        console.log('[AI-BRIDGE] Legacy window.ai APIs detected');
+      }
+    } catch (error) {
+      console.warn('[AI-BRIDGE] Error checking AI capabilities:', error);
+      this.capabilities = { available: false, error: error.message };
+    }
 
     this.isInitialized = true;
     return this.capabilities;
@@ -36,7 +72,9 @@ export class AIBridge {
    */
   async isLanguageModelAvailable() {
     await this.initialize();
-    return this.capabilities?.languageModel?.available === 'readily';
+    // Handle both Chrome 138+ format and legacy format
+    return this.capabilities?.languageModel?.ready ||
+           this.capabilities?.languageModel?.available === 'readily';
   }
 
   /**
@@ -44,7 +82,9 @@ export class AIBridge {
    */
   async isSummarizerAvailable() {
     await this.initialize();
-    return this.capabilities?.summarizer?.available === 'readily';
+    // Handle both Chrome 138+ format and legacy format
+    return this.capabilities?.summarizer?.ready ||
+           this.capabilities?.summarizer?.available === 'readily';
   }
 
   /**
@@ -53,19 +93,38 @@ export class AIBridge {
   async createLanguageSession(options = {}) {
     await this.initialize();
 
-    if (!window.ai?.languageModel) {
-      throw new Error('Language model not available');
-    }
-
     const sessionOptions = {
-      systemPrompt: options.systemPrompt || this.getDefaultSystemPrompt(),
+      initialPrompts: [{
+        role: 'system',
+        content: options.systemPrompt || this.getDefaultSystemPrompt()
+      }],
       temperature: options.temperature || 0.7,
-      topK: options.topK || 3,
-      ...options
+      topK: options.topK || 3
     };
 
     try {
-      this.languageSession = await window.ai.languageModel.create(sessionOptions);
+      // Use global LanguageModel for Chrome 138+
+      if (typeof LanguageModel !== 'undefined') {
+        const availability = await LanguageModel.availability();
+        if (availability !== 'available') {
+          throw new Error(`Language model not available: ${availability}`);
+        }
+        console.log('[AI-BRIDGE] Creating session with Chrome 138+ LanguageModel API');
+        this.languageSession = await LanguageModel.create(sessionOptions);
+      } else if (window.ai?.languageModel) {
+        // Fallback to legacy API with adapted options
+        const legacyOptions = {
+          systemPrompt: options.systemPrompt || this.getDefaultSystemPrompt(),
+          temperature: options.temperature || 0.7,
+          topK: options.topK || 3,
+          ...options
+        };
+        console.log('[AI-BRIDGE] Creating session with legacy window.ai API');
+        this.languageSession = await window.ai.languageModel.create(legacyOptions);
+      } else {
+        throw new Error('No language model API available');
+      }
+
       return this.languageSession;
     } catch (error) {
       console.error('[AI-BRIDGE] Failed to create language session:', error);
@@ -243,7 +302,10 @@ Remember: You can only reference information from the provided browsing history 
    * Check if AI is ready for use
    */
   isReady() {
-    return this.isInitialized && this.capabilities?.languageModel?.available === 'readily';
+    return this.isInitialized && (
+      this.capabilities?.languageModel?.ready ||
+      this.capabilities?.languageModel?.available === 'readily'
+    );
   }
 }
 

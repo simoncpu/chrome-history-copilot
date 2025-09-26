@@ -3,45 +3,88 @@
 ## Overview
 This document details the technical challenges encountered when integrating Chrome's experimental AI APIs (Summarizer and Prompt/LanguageModel) into the AI History extension, along with solutions and workarounds discovered.
 
-## Challenge 1: Missing outputLanguage Parameter
+## Challenge 1: API Namespace Changes (Chrome 138+)
 
 ### Problem
-Chrome AI APIs require an explicit `outputLanguage` parameter, but this wasn't documented clearly in early implementations. Without it:
-- Console warnings appear: "Language parameter required"
-- API calls may fail silently or return unexpected results
-- Different behavior across Chrome versions/builds
+Chrome AI APIs underwent significant changes in Chrome 138+:
+- APIs moved from `window.ai.languageModel` to global `LanguageModel`
+- APIs moved from `window.ai.summarizer` to global `Summarizer`
+- Different availability checking methods required
+- Session creation parameters changed format
 
 ### Manifestation
 ```javascript
-// This would cause warnings:
-const summarizer = await window.ai.summarizer.create();
-const result = await summarizer.summarize(text);
+// This fails in Chrome 138+:
+const session = await window.ai.languageModel.create();
+// Error: "Chrome AI languageModel not available"
 
-// Console: "Warning: outputLanguage parameter recommended"
+// Legacy availability check fails:
+const caps = await window.ai.languageModel.capabilities();
 ```
 
 ### Solution
-Always include both `language` and `outputLanguage` parameters:
+Detect and use the correct API namespace with proper fallback:
 
 ```javascript
-// Correct implementation:
-const summarizer = await window.ai.summarizer.create({
-    language: 'en',
-    outputLanguage: 'en'
-});
+// Chrome 138+ API detection and usage:
+async function initializeAI() {
+  // Check for Chrome 138+ global APIs first
+  const hasLanguageModel = typeof LanguageModel !== 'undefined';
 
-const languageModel = await window.ai.languageModel.create({
-    language: 'en',
-    outputLanguage: 'en'
-});
+  if (hasLanguageModel) {
+    const availability = await LanguageModel.availability();
+    if (availability === 'available') {
+      const session = await LanguageModel.create({
+        initialPrompts: [{
+          role: 'system',
+          content: 'You are a helpful assistant.'
+        }],
+        temperature: 0.7,
+        topK: 3
+      });
+    }
+  } else if (window.ai?.languageModel) {
+    // Fallback to legacy API
+    const session = await window.ai.languageModel.create({
+      systemPrompt: 'You are a helpful assistant.',
+      temperature: 0.7,
+      topK: 3
+    });
+  }
+}
 ```
 
 ### Implementation Details
-- Updated all API calls in `chrome-extension/bridge/ai-bridge.js`
-- Added language parameters to availability checks
-- Consistent usage across all AI API interactions
+- Updated all API detection in `chrome-extension/bridge/ai-bridge.js`
+- Added dual compatibility for Chrome 138+ and legacy APIs
+- Proper availability checking using `LanguageModel.availability()`
+- Changed session creation to use `initialPrompts` array format
 
-## Challenge 2: User Activation Requirements
+## Challenge 2: Language Parameters No Longer Required
+
+### Problem
+Earlier implementations suggested `language` and `outputLanguage` parameters were required, but Google's official samples in Chrome 138+ don't use them.
+
+### Solution
+Remove unnecessary language parameters and use the standard session creation pattern:
+
+```javascript
+// Chrome 138+ - no language parameters needed:
+const session = await LanguageModel.create({
+  initialPrompts: [{ role: 'system', content: systemPrompt }],
+  temperature: 0.7,
+  topK: 3
+});
+
+// Legacy format for older Chrome versions:
+const session = await window.ai.languageModel.create({
+  systemPrompt: systemPrompt,
+  temperature: 0.7,
+  topK: 3
+});
+```
+
+## Challenge 3: User Activation Requirements
 
 ### Problem
 Chrome AI APIs require "user activation" (user gesture) to function:
@@ -73,7 +116,7 @@ document.getElementById('summarizeButton').addEventListener('click', async () =>
 3. **Graceful Degradation**: Fall back to text extraction when AI unavailable
 4. **Offscreen Limitations**: Skip AI availability checks in offscreen contexts
 
-## Challenge 3: API Availability Inconsistency
+## Challenge 4: API Availability Inconsistency
 
 ### Problem
 Chrome AI APIs are experimental and availability varies:
@@ -132,7 +175,7 @@ async checkAvailability(options = {}) {
 }
 ```
 
-## Challenge 4: Context Limitations and Security Restrictions
+## Challenge 5: Context Limitations and Security Restrictions
 
 ### Problem
 Chrome AI APIs have strict context requirements:
@@ -177,7 +220,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
 });
 ```
 
-## Challenge 5: Quota and Rate Limiting
+## Challenge 6: Quota and Rate Limiting
 
 ### Problem
 Chrome AI APIs have usage quotas and input size limits:
@@ -221,7 +264,7 @@ async summarizeContent(content) {
 }
 ```
 
-## Challenge 6: API Lifecycle Management
+## Challenge 7: API Lifecycle Management
 
 ### Problem
 Chrome AI API sessions need proper lifecycle management:
@@ -270,14 +313,80 @@ class ChromeAI {
 }
 ```
 
+## Challenge 8: Graceful Degradation and Fallback Implementation
+
+### Problem
+Extensions need to provide value even when Chrome AI APIs are unavailable:
+- User experience should not break when AI is disabled
+- Fallback responses should still be useful and informative
+- Clear communication about AI availability status
+
+### Manifestation
+```javascript
+// Poor user experience - extension breaks:
+async function generateResponse(query) {
+  const session = await window.ai.languageModel.create(); // Throws error
+  return await session.prompt(query); // Never reached
+}
+```
+
+### Solution
+Implement comprehensive fallback system with graceful degradation:
+
+```javascript
+async function generateResponse(userMessage, searchResults) {
+  try {
+    await aiBridge.initialize();
+    if (aiBridge.isReady()) {
+      console.log('[CHAT] Using Chrome AI for response generation');
+      return await generateWithChromeAI(userMessage, searchResults);
+    }
+  } catch (error) {
+    console.log('[CHAT] Chrome AI unavailable, using fallback:', error.message);
+  }
+
+  // Fallback: structured response without AI
+  return generateFallbackResponse(userMessage, searchResults);
+}
+
+function generateFallbackResponse(userMessage, searchResults) {
+  if (searchResults.length === 0) {
+    return `I couldn't find any pages in your browsing history that match your query: "${userMessage}"`;
+  }
+
+  let response = `**Found ${searchResults.length} relevant pages:**\n\n`;
+
+  searchResults.slice(0, 5).forEach((result, i) => {
+    response += `**${i + 1}. [${result.title}](${result.url})**\n`;
+    if (result.summary || result.snippet) {
+      response += `${(result.summary || result.snippet).substring(0, 150)}...\n`;
+    }
+    response += '\n';
+  });
+
+  response += '*Note: Enhanced AI responses are currently unavailable.*';
+  return response;
+}
+```
+
+### Implementation Details
+- Added comprehensive fallback in `chrome-extension/sidepanel/history_chat.js`
+- Status messages clearly indicate AI availability state
+- Fallback responses are still useful and formatted properly
+- Extension remains fully functional without AI APIs
+
 ## Best Practices Developed
 
-### 1. Always Include Language Parameters
+### 1. Detect Chrome 138+ vs Legacy APIs
 ```javascript
-const options = {
-    language: 'en',
-    outputLanguage: 'en'
-};
+// Check for Chrome 138+ global APIs first
+const hasLanguageModel = typeof LanguageModel !== 'undefined';
+if (hasLanguageModel) {
+    const availability = await LanguageModel.availability();
+    // Use Chrome 138+ API
+} else if (window.ai?.languageModel) {
+    // Fall back to legacy API
+}
 ```
 
 ### 2. Implement Robust Error Handling
@@ -291,11 +400,14 @@ try {
 }
 ```
 
-### 3. Check Availability Before Use
+### 3. Always Check Availability Before Use
 ```javascript
-const status = await chromeAI.checkAvailability();
-if (status.hasSummarizer) {
-    // Safe to use summarizer
+// Chrome 138+ availability check
+const availability = await LanguageModel.availability();
+if (availability === 'available') {
+    // Safe to create session
+} else {
+    // Handle unavailable states: 'unavailable', 'downloadable', 'downloading'
 }
 ```
 
@@ -309,15 +421,33 @@ if (status.hasSummarizer) {
 - Avoid AI calls from service workers
 - Design around offscreen document limitations
 
+### 6. Implement Graceful Fallback
+```javascript
+// Always provide fallback functionality
+async function generateResponse(userMessage, searchResults) {
+  try {
+    if (await isAIAvailable()) {
+      return await generateWithAI(userMessage, searchResults);
+    }
+  } catch (error) {
+    console.log('AI unavailable, using fallback');
+  }
+  return generateFallbackResponse(userMessage, searchResults);
+}
+```
+
 ## Current Status
 
-As of the latest implementation:
-- ✅ All API calls include proper language parameters
-- ✅ Comprehensive availability checking implemented
+As of the latest implementation (December 2024):
+- ✅ Chrome 138+ global API support (`LanguageModel`, `Summarizer`)
+- ✅ Legacy `window.ai` API fallback for older Chrome versions
+- ✅ Proper availability checking using `LanguageModel.availability()`
+- ✅ Comprehensive error handling with graceful fallback
 - ✅ User activation requirements respected
 - ✅ Input size limiting and retry logic in place
 - ✅ Session management with error recovery
-- ✅ Graceful degradation when APIs unavailable
+- ✅ Complete fallback functionality when AI unavailable
+- ✅ Clear user feedback about AI availability status
 
 ## Future Considerations
 

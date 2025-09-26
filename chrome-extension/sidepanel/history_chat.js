@@ -309,9 +309,19 @@ async function searchHistory(query) {
 }
 
 async function generateAIResponse(userMessage, searchResults) {
-  // Strict: require Chrome AI to be available
-  await aiBridge.initialize();
-  return await generateWithChromeAI(userMessage, searchResults);
+  try {
+    await aiBridge.initialize();
+    if (aiBridge.isReady()) {
+      console.log('[CHAT] Using Chrome AI for response generation');
+      return await generateWithChromeAI(userMessage, searchResults);
+    }
+  } catch (error) {
+    console.log('[CHAT] Chrome AI unavailable, using fallback:', error.message);
+  }
+
+  // Fallback: structured response without AI
+  console.log('[CHAT] Generating fallback response');
+  return generateFallbackResponse(userMessage, searchResults);
 }
 
 async function generateWithChromeAI(userMessage, searchResults) {
@@ -361,6 +371,44 @@ function buildChatTurnsContext(maxTurns = 10, maxChars = 2000) {
     buf += line;
   }
   return buf;
+}
+
+// Fallback response generation when Chrome AI is unavailable
+function generateFallbackResponse(userMessage, searchResults) {
+  if (searchResults.length === 0) {
+    return `I couldn't find any pages in your browsing history that match your query: "${userMessage}"\n\nTry different keywords or check if the pages you're looking for have been visited recently.`;
+  }
+
+  const resultCount = searchResults.length;
+  let response = `**Found ${resultCount} relevant page${resultCount > 1 ? 's' : ''} in your browsing history:**\n\n`;
+
+  searchResults.slice(0, 5).forEach((result, i) => {
+    const title = result.title || 'Untitled';
+    const url = result.url;
+    let snippet = '';
+
+    if (result.summary) {
+      snippet = result.summary;
+    } else if (result.snippet) {
+      snippet = result.snippet;
+    } else if (result.content_text) {
+      snippet = result.content_text.substring(0, 150) + '...';
+    }
+
+    response += `**${i + 1}. [${title}](${url})**\n`;
+    if (snippet) {
+      response += `${snippet}\n`;
+    }
+    response += '\n';
+  });
+
+  if (resultCount > 5) {
+    response += `*...and ${resultCount - 5} more results*\n\n`;
+  }
+
+  response += '*Note: Enhanced AI responses are currently unavailable. The above results are from your browsing history search.*';
+
+  return response;
 }
 
 function addAssistantMessage(content, searchResults = []) {
@@ -472,17 +520,27 @@ function scrollToBottom(retries = 2) {
 async function initializeAI() {
   try {
     const caps = await aiBridge.initialize();
-    
-    if (caps?.languageModel?.available === 'readily') {
+
+    // Handle both Chrome 138+ format and legacy format
+    if (caps?.languageModel?.ready || caps?.languageModel?.available === 'readily') {
       statusText.textContent = 'AI ready';
-    } else if (caps?.languageModel) {
-      statusText.textContent = 'AI initializing...';
+      console.log('[CHAT] Chrome AI initialized successfully');
+    } else if (caps?.languageModel?.available === 'available') {
+      statusText.textContent = 'AI ready';
+      console.log('[CHAT] Chrome AI available (138+ format)');
+    } else if (caps?.languageModel?.available) {
+      statusText.textContent = `AI status: ${caps.languageModel.available}`;
+      console.log('[CHAT] Chrome AI status:', caps.languageModel.available);
+    } else if (caps?.available === false) {
+      statusText.textContent = 'Chat ready (enhanced mode unavailable)';
+      console.log('[CHAT] Chrome AI not available, fallback mode enabled');
     } else {
-      statusText.textContent = 'AI not available';
+      statusText.textContent = 'Checking AI capabilities...';
     }
   } catch (error) {
-    console.warn('[CHAT] AI initialization failed:', error);
-    statusText.textContent = 'AI not available';
+    console.warn('[CHAT] AI initialization error (non-fatal):', error);
+    statusText.textContent = 'Chat ready (enhanced mode unavailable)';
+    // Don't throw - allow chat to work without AI
   }
 }
 

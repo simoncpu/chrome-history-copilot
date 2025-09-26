@@ -320,7 +320,7 @@ async function processChatRequest(userMessage) {
       console.log('[CHAT] Step 2 complete: Search results analyzed:', {
         resultCount: searchResults?.length || 0,
         quality: searchQuality?.quality,
-        avgScore: searchQuality?.avgScore,
+        firstScore: searchQuality?.firstScore,
         highScoreCount: searchResults?.filter(r => (r.score || r.finalScore || 0) >= 0.6).length || 0
       });
 
@@ -514,18 +514,6 @@ function getRecentMessagesForSession(maxMessages = 24) {
   // Add updated system prompt for intent-aware behavior
   messages.push({
     role: 'system',
-    //     return `You are an AI assistant that helps users find information from their browsing history.
-
-    // Your responsibilities:
-    // 1. Answer questions based ONLY on the provided browsing history snippets
-    // 2. Keep responses brief and concise
-    // 3. If no relevant information is found, say so clearly
-
-    // Format guidelines:
-    // - Use **bold** for emphasis
-    // - Be direct and actionable
-
-    // Remember: You can only reference information from the provided browsing history context.`;
     content: `You are an AI assistant that helps users with both general conversation and finding information from their browsing history.
 
 Your responsibilities:
@@ -538,14 +526,20 @@ Your responsibilities:
 **For search queries (when browsing history context is provided):**
 - If SEARCH_STATUS indicates "No relevant results found": Tell the user you couldn't find anything in their browsing history about that topic
 - If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results
-- For high-confidence results: Present them confidently.
+- For high-confidence results: Present them confidently. Only the first result is high-confidence though. Treat the rest as medium or low confidence.
+
+**Using the enriched context:**
+- Reference visit patterns when relevant ("You visited this 3 times" or "You last visited this 2 hours ago")
+- Mention the source website when helpful ("According to github.com..." or "From your Stack Overflow browsing...")
+- Use recency information to provide context ("This recent article you visited..." vs "This page you looked at last month...")
 
 **Response guidelines:**
-- Format responses as plain text only. Do not inlclude any links or HTML
+- Format responses as plain text only. Do not include any links or HTML
 - Only reference information that has been provided to you
 - Match the user's tone (casual vs. informational)
 - Keep responses brief and concise
-- Be transparent about search result quality`
+- Be transparent about search result quality
+- Make use of visit history and timing information to provide better context`
   });
 
   // Add recent chat messages, limiting by maxMessages and rough token count
@@ -563,46 +557,77 @@ Your responsibilities:
 }
 
 /**
- * Analyze the quality of search results based on similarity scores
+ * Analyze the quality of search results based on the first (most relevant) result's score
  * @param {Array} searchResults - Array of search results with score/similarity values
- * @returns {Object} Quality analysis with quality level and average score
+ * @returns {Object} Quality analysis with quality level and first result's score
  */
 function analyzeSearchQuality(searchResults) {
   if (!searchResults || searchResults.length === 0) {
-    return { quality: 'none', avgScore: 0, count: 0 };
+    return { quality: 'none', firstScore: 0, count: 0 };
   }
 
-  // Calculate average score from various possible score fields
+  // Get the first result's score (most relevant)
+  const firstResult = searchResults[0];
+  const firstScore = firstResult?.score || firstResult?.similarity || firstResult?.finalScore || 0;
+
+  // Calculate all scores for reference
   const scores = searchResults.map(result => {
     return result.score || result.similarity || result.finalScore || 0;
   }).filter(score => typeof score === 'number' && score >= 0);
 
   if (scores.length === 0) {
-    return { quality: 'low', avgScore: 0, count: searchResults.length };
+    return { quality: 'low', firstScore: 0, count: searchResults.length };
   }
 
-  const avgScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
   const maxScore = Math.max(...scores);
 
-  // Determine quality based on both average and max scores
-  // High quality: good average (>= 0.3) or at least one very high score (>= 0.6)
-  // Low quality: poor average (< 0.3) and no high scores
+  // Determine quality based on the first (most relevant) result's score
+  // High quality: first result has good score (>= 0.3)
+  // Low quality: first result has poor score (< 0.3)
   let quality;
-  if (avgScore >= 0.3 || maxScore >= 0.6) {
+  if (firstScore >= 0.3) {
     quality = 'high';
   } else {
     quality = 'low';
   }
 
-  console.log('[CHAT] Search quality analysis:', { quality, avgScore, maxScore, count: searchResults.length });
+  console.log('[CHAT] Search quality analysis:', { quality, firstScore, maxScore, count: searchResults.length });
 
   return {
     quality,
-    avgScore,
+    firstScore,
     maxScore,
     count: searchResults.length,
     scores
   };
+}
+
+// Helper function to format timestamps as relative time
+function formatLastVisit(timestamp) {
+  try {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 60) {
+      return `${diffMinutes}m ago`;
+    } else if (diffHours < 24) {
+      return `${diffHours}h ago`;
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else if (diffDays < 30) {
+      return `${Math.floor(diffDays / 7)}w ago`;
+    } else if (diffDays < 365) {
+      return `${Math.floor(diffDays / 30)}mo ago`;
+    } else {
+      return `${Math.floor(diffDays / 365)}y ago`;
+    }
+  } catch (error) {
+    return 'unknown';
+  }
 }
 
 function buildSearchContext(searchResults, quality = null) {
@@ -620,7 +645,7 @@ function buildSearchContext(searchResults, quality = null) {
 
   console.log('[CHAT] buildSearchContext: Quality analysis:', {
     quality: quality.quality,
-    avgScore: quality.avgScore?.toFixed(3),
+    firstScore: quality.firstScore?.toFixed(3),
     resultsToInclude: Math.min(searchResults.length, 3)
   });
 
@@ -642,18 +667,45 @@ function buildSearchContext(searchResults, quality = null) {
 
     console.log(`  CONTEXT-${index + 1}. [${confidenceLabel}] "${result.title}" (${(score * 100).toFixed(1)}%) - ${result.url}`);
 
-    context += `Title: **${result.title}**`;
+    // Main title with confidence
+    context += `## ${result.title}\n`;
     if (quality.quality === 'high' && score >= 0.6) {
-      context += ` (high confidence: ${(score * 100).toFixed(0)}%)`;
+      context += `### Confidence\n`;
+      context += `High confidence: ${(score * 100).toFixed(0)}%\n`;
     } else if (quality.quality === 'low') {
-      context += ` (low confidence: ${(score * 100).toFixed(0)}%)`;
+      context += `### Confidence\n`;
+      context += `Low confidence: ${(score * 100).toFixed(0)}%\n`;
     }
-    context += `\n`;
+
+    // Website and URL info
+    if (result.domain) {
+      context += `### Website\n${result.domain}\n`;
+    }
+    context += `### URL\n${result.url}\n`;
+
+    // Visit information
+    const visitInfo = [];
+    if (result.visit_count && result.visit_count > 1) {
+      visitInfo.push(`${result.visit_count} visits`);
+    } else {
+      visitInfo.push('1 visit');
+    }
+
+    if (result.last_visit_at) {
+      visitInfo.push(`last visited ${formatLastVisit(result.last_visit_at)}`);
+    }
+
+    if (visitInfo.length > 0) {
+      context += `### Visit History\n${visitInfo.join(', ')}\n`;
+    }
+
+    // Main content
     if (result.summary || result.snippet) {
       const content = result.summary || result.snippet;
-      context += `   Content: ${content}\n`;
+      context += `### Content\n${content}\n`;
     }
-    context += '\n';
+
+    context += `\n---\n\n`;
   });
 
   console.log('[CHAT] buildSearchContext: Context built, total length:', context.length, 'characters');

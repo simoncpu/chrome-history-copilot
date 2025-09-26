@@ -3,6 +3,13 @@
 ## Overview
 This document details the technical challenges encountered when integrating Chrome's experimental AI APIs (Summarizer and Prompt/LanguageModel) into the AI History extension, along with solutions and workarounds discovered.
 
+## Notes
+- Browse https://github.com/GoogleChrome/chrome-extensions-samples/tree/main/functional-samples to learn how to use the Chrome AI API via examples.
+  The examples you need are chrome-extensions-samples/tree/main/functional-samples/ai.gemini*
+- Browse https://developer.chrome.com/docs/ai/built-in-apis to learn how to use the Chrome AI API via documentation.
+  Summarizer API is at https://developer.chrome.com/docs/ai/summarizer-api
+  Prompt API is at https://developer.chrome.com/docs/ai/prompt-api
+
 ## Challenge 1: API Namespace Changes (Chrome 138+)
 
 ### Problem

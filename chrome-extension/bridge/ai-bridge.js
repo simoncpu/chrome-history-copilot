@@ -89,7 +89,8 @@ export class AIBridge {
       }],
       temperature: options.temperature || 0.7,
       topK: options.topK || 3,
-      outputLanguage: options.outputLanguage || 'en'
+      language: options.language || 'en'
+      // outputLanguage: options.outputLanguage || 'en'  // Commented out for testing
     };
 
     // Use global LanguageModel for Chrome 138+
@@ -106,6 +107,8 @@ export class AIBridge {
         systemPrompt: options.systemPrompt || this.getDefaultSystemPrompt(),
         temperature: options.temperature || 0.7,
         topK: options.topK || 3,
+        language: options.language || 'en',
+        // outputLanguage: options.outputLanguage || 'en',  // Commented out for testing
         ...options
       };
       console.log('[AI-BRIDGE] Creating session with legacy window.ai API');

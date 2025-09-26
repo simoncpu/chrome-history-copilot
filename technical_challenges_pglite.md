@@ -385,16 +385,10 @@ The chat interface uses a two-stage search process: keyword extraction followed 
 ```javascript
 // Enhanced search with keyword filtering and boosting
 async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 25) {
-  const {
-    keywords = [],
-    phrases = [],
-    must_include = [],
-    must_exclude = []
-  } = extractedKeywords;
+  const { keywords = [] } = extractedKeywords;
 
-  // Combine all terms for embedding
-  const searchTerms = [...keywords, ...phrases];
-  const searchText = searchTerms.length > 0 ? searchTerms.join(' ') : originalQuery;
+  // Use keywords for embedding
+  const searchText = keywords.length > 0 ? keywords.join(' ') : originalQuery;
 
   // Generate embedding for search terms
   const embedding = await embedder(searchText);
@@ -404,22 +398,13 @@ async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 
   const params = [];
   let paramIndex = 1;
 
-  // Must include terms (boost scoring)
-  if (must_include.length > 0) {
-    const includeConditions = must_include.map(term => {
+  // Basic keyword filtering for relevance boost
+  if (keywords.length > 0) {
+    const keywordConditions = keywords.map(term => {
       params.push(`%${term.toLowerCase()}%`);
       return `(LOWER(title) LIKE $${paramIndex++} OR LOWER(content_text) LIKE $${paramIndex-1})`;
     });
-    whereClause += ` AND (${includeConditions.join(' OR ')})`;
-  }
-
-  // Must exclude terms (filter out)
-  if (must_exclude.length > 0) {
-    const excludeConditions = must_exclude.map(term => {
-      params.push(`%${term.toLowerCase()}%`);
-      return `(LOWER(title) NOT LIKE $${paramIndex++} AND LOWER(content_text) NOT LIKE $${paramIndex-1})`;
-    });
-    whereClause += ` AND ${excludeConditions.join(' AND ')}`;
+    whereClause += ` AND (${keywordConditions.join(' OR ')})`;
   }
 
   // Vector similarity search with keyword filtering
@@ -441,21 +426,16 @@ async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 
   return vectorResults.rows.map(result => {
     let boost = 0;
 
-    // Boost for must_include terms in title
+    // Boost for keywords in title
     const titleLower = result.title?.toLowerCase() || '';
-    must_include.forEach(term => {
-      if (titleLower.includes(term.toLowerCase())) boost += 0.15;
-    });
-
-    // Boost for extracted keywords and phrases
-    [...keywords, ...phrases].forEach(term => {
+    keywords.forEach(term => {
       if (titleLower.includes(term.toLowerCase())) boost += 0.1;
     });
 
     return {
       ...result,
       similarity: Math.min(1, result.similarity + boost),
-      matchedKeywords: [...keywords, ...phrases, ...must_include]
+      matchedKeywords: keywords
         .filter(term => titleLower.includes(term.toLowerCase()))
     };
   }).sort((a, b) => b.similarity - a.similarity);
@@ -463,7 +443,7 @@ async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 
 
 // Browser history search with keyword filtering
 async function getBrowserHistoryWithKeywords(extractedKeywords, originalQuery, limit = 100) {
-  const { must_include = [], must_exclude = [] } = extractedKeywords;
+  const { keywords = [] } = extractedKeywords;
 
   // Search Chrome history with original query
   const historyResults = await chrome.history.search({
@@ -476,21 +456,8 @@ async function getBrowserHistoryWithKeywords(extractedKeywords, originalQuery, l
   return historyResults.filter(item => {
     const searchText = `${item.title} ${item.url}`.toLowerCase();
 
-    // Must include at least one required term
-    if (must_include.length > 0) {
-      const hasRequired = must_include.some(term =>
-        searchText.includes(term.toLowerCase())
-      );
-      if (!hasRequired) return false;
-    }
-
-    // Must not include any excluded terms
-    if (must_exclude.length > 0) {
-      const hasExcluded = must_exclude.some(term =>
-        searchText.includes(term.toLowerCase())
-      );
-      if (hasExcluded) return false;
-    }
+    // Simple keyword relevance - no mandatory filtering
+    // All results are kept and boosted by keyword relevance
 
     return true;
   }).slice(0, limit);

@@ -918,18 +918,11 @@ class DatabaseWrapper {
     let textQuery = query;
     let vectorQuery = query;
 
-    // Apply must_include terms as positive filters
-    if (keywords.must_include && keywords.must_include.length > 0) {
-      const mustIncludeTerms = keywords.must_include.join(' ');
-      textQuery = `${query} ${mustIncludeTerms}`;
-      vectorQuery = `${query} ${mustIncludeTerms}`;
-    }
-
-    // Add phrases as exact matches
-    if (keywords.phrases && keywords.phrases.length > 0) {
-      const phraseQueries = keywords.phrases.map(phrase => `"${phrase}"`).join(' ');
-      textQuery = `${textQuery} ${phraseQueries}`;
-      vectorQuery = `${vectorQuery} ${keywords.phrases.join(' ')}`;
+    // Use keywords for search enhancement
+    if (keywords.keywords && keywords.keywords.length > 0) {
+      const keywordTerms = keywords.keywords.join(' ');
+      textQuery = `${query} ${keywordTerms}`;
+      vectorQuery = `${query} ${keywordTerms}`;
     }
 
     // Use the enhanced queries for search
@@ -939,25 +932,8 @@ class DatabaseWrapper {
       queryEmbedding
     });
 
-    // Apply must_exclude filtering
-    let filteredResults = results;
-    if (keywords.must_exclude && keywords.must_exclude.length > 0) {
-      filteredResults = results.filter(result => {
-        const content = [
-          result.title || '',
-          result.content_text || '',
-          result.url || '',
-          result.domain || ''
-        ].join(' ').toLowerCase();
-
-        return !keywords.must_exclude.some(excludeTerm =>
-          content.includes(excludeTerm.toLowerCase())
-        );
-      });
-    }
-
     // Apply keyword boosting
-    const boostedResults = filteredResults.map(result => {
+    const boostedResults = results.map(result => {
       let boostScore = 0;
 
       // Boost for keyword matches in title/content
@@ -969,14 +945,6 @@ class DatabaseWrapper {
         boostScore += (matchCount / keywords.keywords.length) * 0.1;
       }
 
-      // Boost for phrase matches
-      if (keywords.phrases && keywords.phrases.length > 0) {
-        const content = [result.title || '', result.content_text || ''].join(' ').toLowerCase();
-        const phraseMatchCount = keywords.phrases.filter(phrase =>
-          content.includes(phrase.toLowerCase())
-        ).length;
-        boostScore += (phraseMatchCount / keywords.phrases.length) * 0.15;
-      }
 
       return {
         ...result,
@@ -1653,16 +1621,6 @@ async function getBrowserHistoryWithKeywords({ query = '', keywords, limit = 100
     if (keywords) {
       console.log('[OFFSCREEN] Applying keyword filters to browser history:', keywords);
 
-      // Filter out must_exclude terms
-      if (keywords.must_exclude && keywords.must_exclude.length > 0) {
-        results = results.filter(item => {
-          const content = [item.title || '', item.url || ''].join(' ').toLowerCase();
-          return !keywords.must_exclude.some(excludeTerm =>
-            content.includes(excludeTerm.toLowerCase())
-          );
-        });
-      }
-
       // Boost results with keyword matches
       results = results.map(item => {
         let boostScore = 0;
@@ -1676,14 +1634,6 @@ async function getBrowserHistoryWithKeywords({ query = '', keywords, limit = 100
           boostScore += (matchCount / keywords.keywords.length) * 0.1;
         }
 
-        // Boost for exact phrases
-        if (keywords.phrases && keywords.phrases.length > 0) {
-          const phraseMatchCount = keywords.phrases.filter(phrase =>
-            content.includes(phrase.toLowerCase())
-          ).length;
-          boostScore += (phraseMatchCount / keywords.phrases.length) * 0.15;
-        }
-
         return {
           ...item,
           keywordBoost: boostScore,
@@ -1692,7 +1642,7 @@ async function getBrowserHistoryWithKeywords({ query = '', keywords, limit = 100
       });
 
       // Sort by keyword relevance if we have boosts
-      if (keywords.keywords?.length > 0 || keywords.phrases?.length > 0) {
+      if (keywords.keywords?.length > 0) {
         results.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
       }
     }

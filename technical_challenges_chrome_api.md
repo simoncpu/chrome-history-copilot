@@ -327,7 +327,7 @@ The extension needed to implement the complete Chrome AI-powered chat search flo
 - Two-stage keyword extraction → search → response generation
 - Message retention with PGlite database integration
 - Session management with `initialPrompts` and context appending
-- Keyword-filtered hybrid search with must_include/must_exclude logic
+- Keyword-filtered hybrid search with simple keyword relevance boosting
 - JSON Schema-constrained AI responses for structured data extraction
 
 ### Manifestation
@@ -383,12 +383,9 @@ class KeywordExtractor {
     return {
       type: "object",
       properties: {
-        keywords: { type: "array", items: { type: "string" } },
-        phrases: { type: "array", items: { type: "string" } },
-        must_include: { type: "array", items: { type: "string" } },
-        must_exclude: { type: "array", items: { type: "string" } }
+        keywords: { type: "array", items: { type: "string" } }
       },
-      required: ["keywords", "phrases", "must_include", "must_exclude"]
+      required: ["keywords"]
     };
   }
 }
@@ -397,21 +394,26 @@ class KeywordExtractor {
 #### Enhanced Search Integration
 ```javascript
 async function searchWithKeywords(query, keywords, options = {}) {
-  // Apply must_include terms as positive filters
-  if (keywords.must_include && keywords.must_include.length > 0) {
-    const mustIncludeTerms = keywords.must_include.join(' ');
-    textQuery = `${query} ${mustIncludeTerms}`;
+  // Apply keyword enhancement to search
+  if (keywords.keywords && keywords.keywords.length > 0) {
+    const keywordTerms = keywords.keywords.join(' ');
+    textQuery = `${query} ${keywordTerms}`;
   }
 
-  // Apply must_exclude filtering
-  if (keywords.must_exclude && keywords.must_exclude.length > 0) {
-    filteredResults = results.filter(result => {
-      const content = [result.title, result.content_text, result.url].join(' ').toLowerCase();
-      return !keywords.must_exclude.some(excludeTerm =>
-        content.includes(excludeTerm.toLowerCase())
-      );
-    });
-  }
+  // Simple keyword boosting for relevance
+  const boostedResults = results.map(result => {
+    const content = [result.title, result.content_text, result.url].join(' ').toLowerCase();
+    let boost = 0;
+
+    if (keywords.keywords) {
+      const matchCount = keywords.keywords.filter(kw =>
+        content.includes(kw.toLowerCase())
+      ).length;
+      boost = (matchCount / keywords.keywords.length) * 0.1;
+    }
+
+    return { ...result, finalScore: (result.score || 0) + boost };
+  });
 
   // Apply keyword boosting
   const boostedResults = filteredResults.map(result => {
@@ -454,7 +456,7 @@ async function saveChatMessage(role, content) {
 - **Complete API Integration**: Full Chrome 138+ `LanguageModel` and `Summarizer` support
 - **Session Management**: `initialPrompts` for chat context, `append()` for search context
 - **Structured Extraction**: JSON Schema `responseConstraint` for consistent keyword extraction
-- **Enhanced Search**: Keyword filtering with must_include/must_exclude logic and boosting
+- **Enhanced Search**: Keyword filtering with relevance boosting
 - **Database Integration**: PGlite tables for persistent chat message retention
 - **Debug Interface**: Comprehensive testing tools for all Chrome AI components
 
@@ -559,7 +561,7 @@ As of the latest implementation (January 2025):
 - ✅ **Keyword Extraction Service**: Uses Prompt API with JSON Schema responseConstraint
 - ✅ **Message Retention System**: PGlite-based chat history with automatic FIFO eviction (200 messages)
 - ✅ **Session Management**: `initialPrompts` for chat context, `append()` for search context
-- ✅ **Enhanced Search Integration**: Keyword-filtered hybrid search with must_include/must_exclude
+- ✅ **Enhanced Search Integration**: Keyword-filtered hybrid search with relevance boosting
 - ✅ **Progress Tracking**: Model download progress, quota usage monitoring
 - ✅ **Error Handling**: Specific error messages for AI unavailability, quota limits, downloads
 - ✅ **Debug Interface**: Comprehensive testing tools for all Chrome AI components
@@ -665,13 +667,13 @@ The extension now implements the complete Chat Search Flow as specified:
 ### 2. Keyword Extraction
 - **File**: `chrome-extension/bridge/keyword-extractor.js`
 - Uses `LanguageModel.create()` with JSON Schema `responseConstraint`
-- Extracts: `keywords`, `phrases`, `must_include`, `must_exclude`
+- Extracts: `keywords` for simple search enhancement
 - Low temperature (0.1) and topK (1) for consistent extraction
 
 ### 3. Enhanced Search Integration
 - **File**: `chrome-extension/offscreen.js:searchWithKeywords()`
 - Maps extracted keywords to hybrid search parameters
-- Applies `must_exclude` filtering and keyword boosting
+- Applies keyword boosting for relevance enhancement
 - Combines PGlite vector search with Chrome browser history search
 
 ### 4. Context Building and Response Generation

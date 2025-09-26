@@ -190,6 +190,89 @@ const sqlite3 = await sqlite3InitModule({
 
 - `chrome-extension/offscreen.js` - Updated SQLite initialization
 
+## Search Result Inconsistency Between Chat and Search Pages
+
+### Problem
+
+Users were getting different search results when searching for the same term (e.g., "emails") in:
+- `history_search.html` (accurate results)
+- `history_chat.html` (different/inaccurate results)
+
+### Root Cause
+
+The two pages were using different search approaches:
+
+1. **`history_search.js`**:
+   - Used raw user input directly as search query
+   - Example: User types "emails" → Search query: "emails"
+
+2. **`history_chat.js`**:
+   - Extracted keywords from conversational input but then used the **original message** as search query
+   - Example: User says "Find me emails" → Keywords: `["emails"]` → Search query: "Find me emails" (full sentence)
+
+This caused different search algorithms to be triggered:
+- `history_search.js`: Plain search without keyword boosting
+- `history_chat.js`: Keyword-enhanced search with different scoring
+
+### Impact
+
+- Inconsistent user experience across the two interfaces
+- Chat search was less accurate due to searching with conversational phrases instead of focused keywords
+- Users couldn't reproduce search results from the search page in chat
+
+### Solution
+
+Modified `searchHistoryWithKeywords()` in `history_chat.js` to use extracted keywords as the search query:
+
+```javascript
+async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
+  try {
+    // Use extracted keywords as the search query instead of original message
+    const keywordsQuery = extractedKeywords.keywords?.join(' ') || originalQuery;
+
+    console.log('[CHAT-DEBUG] Original query:', originalQuery);
+    console.log('[CHAT-DEBUG] Extracted keywords:', extractedKeywords);
+    console.log('[CHAT-DEBUG] Search query (keywords joined):', keywordsQuery);
+
+    const response = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'search',
+      data: {
+        query: keywordsQuery,  // Now uses extracted keywords
+        mode: 'hybrid-rerank',
+        limit: 25
+      }
+    });
+    // ... rest of function
+  }
+}
+```
+
+### Search Flow After Fix
+
+1. **User input**: "Find me emails from last week"
+2. **Keywords extracted**: `["emails"]` (keyword extraction still works for intent detection)
+3. **Search query**: `"emails"` (keywords joined)
+4. **Result**: Same results as typing "emails" in `history_search.html`
+
+### Files Modified
+
+- `chrome-extension/sidepanel/history_chat.js` - Modified search query logic
+
+### Result
+
+- Both search interfaces now return consistent results for the same search terms
+- Chat search is more accurate by focusing on key concepts rather than conversational phrases
+- Intent detection still works for distinguishing search vs. chat queries
+- Debug logging helps track the query transformation process
+
+### Lessons Learned
+
+1. **Consistent search behavior**: Different UIs should use the same underlying search logic for the same queries
+2. **Query preprocessing**: Convert conversational input to focused search terms before querying
+3. **Debug logging**: Always log query transformations to help debug search inconsistencies
+4. **Intent vs. execution**: Separate intent detection (is this a search?) from query execution (what to search for)
+
 ## Future Considerations
 
 - Monitor for other edge case URLs that might cause similar issues

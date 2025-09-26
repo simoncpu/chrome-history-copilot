@@ -1552,41 +1552,70 @@ async function handleTestFullChatFlow() {
     const query = testQuery.value.trim() || 'Find me JavaScript tutorials I visited last week';
     showChromeAITestResults(`Testing full chat flow for: "${query}"...`);
 
-    let resultsHtml = `<h3>Full Chat Flow Test</h3>`;
+    let resultsHtml = `<h3>Full Chat Flow Test (Production Code)</h3>`;
     resultsHtml += `<p><strong>Query:</strong> "${query}"</p>`;
+    resultsHtml += `<p><em>Using actual production functions from history_chat.js</em></p>`;
 
-    // Step 1: Keyword extraction
+    const startTime = performance.now();
+
+    // Ensure we have access to the production functions
+    if (!window.chatPageController) {
+      throw new Error('Chat page functions not available. Please open the chat page first.');
+    }
+
+    const {
+      searchHistoryWithKeywords,
+      buildSearchContext,
+      generateAIResponse,
+      analyzeSearchQuality
+    } = window.chatPageController;
+
+    // Step 1: Keyword extraction (using production keywordExtractor)
     resultsHtml += `<h4>Step 1: Keyword Extraction</h4>`;
     const { keywordExtractor } = await import('./bridge/keyword-extractor.js');
-    const startTime = performance.now();
 
     const keywords = await keywordExtractor.extractKeywords(query);
     resultsHtml += `<pre>${JSON.stringify(keywords, null, 2)}</pre>`;
 
-    // Step 2: Search with keywords
-    resultsHtml += `<h4>Step 2: Search with Keywords</h4>`;
-    const searchResponse = await chrome.runtime.sendMessage({
-      target: 'offscreen',
-      type: 'search',
-      data: { query, keywords, mode: 'hybrid-rerank', limit: 5 }
-    });
+    // Step 2: Search with keywords (using production searchHistoryWithKeywords)
+    resultsHtml += `<h4>Step 2: Search with Keywords (Production Function)</h4>`;
 
-    if (searchResponse.error) {
-      throw new Error(searchResponse.error);
+    const searchResults = await searchHistoryWithKeywords(keywords, query);
+    resultsHtml += `<p>Found ${searchResults?.length || 0} results</p>`;
+    if (searchResults.length > 0) {
+      resultsHtml += `<pre>${JSON.stringify(searchResults.slice(0, 2).map(r => ({
+        title: r.title,
+        url: r.url,
+        score: r.score || r.finalScore || r.similarity || 0,
+        hasContent: !!(r.summary || r.snippet)
+      })), null, 2)}</pre>`;
     }
 
-    resultsHtml += `<p>Found ${searchResponse.results?.length || 0} results</p>`;
-    resultsHtml += `<pre>${JSON.stringify(searchResponse.results?.slice(0, 2) || [], null, 2)}</pre>`;
+    // Step 3: Quality analysis (using production analyzeSearchQuality)
+    resultsHtml += `<h4>Step 3: Search Quality Analysis</h4>`;
 
-    // Step 3: AI Response Generation
-    resultsHtml += `<h4>Step 3: AI Response Generation</h4>`;
-    const { aiBridge } = await import('./bridge/ai-bridge.js');
-    await aiBridge.initialize();
+    const searchQuality = analyzeSearchQuality(searchResults);
+    resultsHtml += `<pre>${JSON.stringify(searchQuality, null, 2)}</pre>`;
 
-    const searchResults = searchResponse.results || [];
-    const context = aiBridge.buildContext(searchResults, 5);
+    // Step 4: Context building (using production buildSearchContext)
+    resultsHtml += `<h4>Step 4: Context Building (Production Function)</h4>`;
 
-    const response = await aiBridge.generateResponse(query, context);
+    const context = buildSearchContext(searchResults, searchQuality);
+    resultsHtml += `<p><strong>Context Length:</strong> ${context.length} characters</p>`;
+    resultsHtml += `<div style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 200px; overflow-y: auto;">
+      <pre>${context}</pre>
+    </div>`;
+
+    // Step 5: AI Response Generation (using production generateAIResponse)
+    resultsHtml += `<h4>Step 5: AI Response Generation (Production Function)</h4>`;
+
+    const response = await generateAIResponse(
+      query,
+      keywords.is_search_query,
+      searchResults,
+      searchQuality
+    );
+
     const duration = Math.round(performance.now() - startTime);
 
     resultsHtml += `<p><strong>Total Duration:</strong> ${duration}ms</p>`;

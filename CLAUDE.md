@@ -98,7 +98,7 @@ Re‑use and adapt working patterns/code as documented in:
 - **Session Quota Tracking**: Implemented `inputUsage` vs `inputQuota` monitoring with automatic session recreation
 
 ### Two-Stage Chat Search Flow
-- **Stage 1 - Keyword Extraction**: AI analyzes user queries to extract keywords, phrases, must_include, and must_exclude terms using structured JSON Schema constraints
+- **Stage 1 - Keyword Extraction**: AI analyzes user queries to extract keywords using structured JSON Schema constraints
 - **Stage 2 - Enhanced Search**: Uses extracted keywords for filtered vector similarity search with semantic boosting and browser history integration
 - **Context Composition**: Builds AI context using `initialPrompts` for priming and `append()` for dynamic search results injection
 
@@ -275,6 +275,8 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 ## Debug Page (debug.html)
 
+**IMPORTANT**: The debug page MUST use actual production code for testing. Do NOT create separate versions of functions in debug.js. The goal is to test the exact same code path that users experience.
+
 - **Site Permissions Management**:
   - Check current site access for content extraction
   - Grant site permissions with one-click buttons
@@ -285,7 +287,8 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
   - Real-time Chrome AI availability detection (`window.ai.languageModel`, `window.ai.summarizer`)
   - Interactive keyword extraction testing with JSON Schema validation
   - Summarizer API testing with content input and progress monitoring
-  - Full chat search flow testing with step-by-step timing analysis
+  - **Full chat search flow testing using production functions from `history_chat.js`**
+  - Step-by-step timing analysis of actual production code path
   - Model download progress indicators and quota usage tracking
 
 - **DB Explorer**:
@@ -312,6 +315,12 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
   - Performance metrics for search operations and AI model operations
 
 - **Context Menu Integration**: "AI History: Debug" entry opens `debug.html` in new tab for quick access
+
+### Debug Testing Requirements:
+- All testing functions MUST import and use production code from `sidepanel/` and `bridge/` directories
+- Functions should be accessed via `window.chatPageController` exports or direct imports
+- Never create duplicate implementations in `debug.js` - always use the actual production functions
+- This ensures debug results accurately reflect user experience
 
 
 ## Background and Offscreen Orchestration

@@ -21,29 +21,32 @@ export class KeywordExtractor {
     const instruction = `Analyze the user's query to determine if they are searching for specific information or just chatting.
 
 First, determine if this is a search query:
-- Search queries: "find pages about X", "show me articles on Y", "what did I read about Z", "my bookmarks on topic"
-- Non-search queries: "hello", "hi", "thanks", "how are you", "what can you do", casual conversation
+- Search queries: phrases similar to "find pages about X", "show me articles on Y", "what did I read about Z", "my bookmarks on topic"
 
-Then extract keywords only if it's a search query:
+Then extract meaningful phrases and concepts only if it's a search query:
 
 Rules for keyword extraction (only when is_search_query=true):
-- Keep 1-5 concise keywords or phrases
-- Prefer nouns and noun-phrases; drop politeness words
+- Extract meaningful phrases and concepts, NOT individual words
+- Keep multi-word terms together (e.g., "machine learning", "React hooks", "JavaScript tutorials")
 - Preserve quoted phrases exactly
-- Lowercase; lemmatize (cats -> cat)
-- Remove stopwords and filler (please, info, give me)
+- Remove politeness words and filler ("please", "info", "give me", "find", "show me")
+- Use lowercase
+- Focus on the core concepts being searched for
 
-If not a search query, set is_search_query=false and leave all arrays empty.
+Examples:
+- "JavaScript tutorials" → ["javascript tutorials"] (NOT ["javascript", "tutorials"])
+- "machine learning algorithms" → ["machine learning algorithms"] or ["machine learning", "algorithms"]
+- "React hooks documentation" → ["react hooks", "documentation"] (NOT ["react", "hooks", "documentation"])
+- "Python programming" → ["python programming"] (NOT ["python", "programming"])
+
+If not a search query, set is_search_query=false and leave keywords array empty.
 
 User query: "${query}"
 
 Response must be valid JSON with this exact format:
 {
   "is_search_query": true/false,
-  "keywords": ["array", "of", "strings"],
-  "phrases": ["exact phrases"],
-  "must_include": ["required", "terms"],
-  "must_exclude": ["forbidden", "terms"]
+  "keywords": ["array", "of", "meaningful", "phrases"]
 }`;
 
     try {
@@ -83,9 +86,8 @@ Response must be valid JSON with this exact format:
         extracted.is_search_query = false;
       }
 
-      for (const key of ['keywords', 'phrases', 'must_include', 'must_exclude']) {
-        extracted[key] = (extracted[key] || []).map(s => s.toLowerCase().trim()).filter(s => s.length > 0);
-      }
+      // Process keywords array
+      extracted.keywords = (extracted.keywords || []).map(s => s.toLowerCase().trim()).filter(s => s.length > 0);
 
       console.log('[KEYWORD-EXTRACTOR] Extracted:', extracted);
       return extracted;
@@ -153,30 +155,15 @@ Response must be valid JSON with this exact format:
       properties: {
         is_search_query: {
           type: "boolean",
-          description: "True if the user is searching for specific information, false if just chatting/greeting"
+          description: "True if the user is searching for specific information, false if just chatting"
         },
         keywords: {
           type: "array",
           items: { type: "string" },
           description: "General search terms (empty if not searching)"
-        },
-        phrases: {
-          type: "array",
-          items: { type: "string" },
-          description: "Exact phrases to search for (empty if not searching)"
-        },
-        must_include: {
-          type: "array",
-          items: { type: "string" },
-          description: "Terms that must be present (empty if not searching)"
-        },
-        must_exclude: {
-          type: "array",
-          items: { type: "string" },
-          description: "Terms that must not be present (empty if not searching)"
         }
       },
-      required: ["is_search_query", "keywords", "phrases", "must_include", "must_exclude"]
+      required: ["is_search_query", "keywords"]
     };
   }
 

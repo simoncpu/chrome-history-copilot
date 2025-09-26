@@ -29,11 +29,11 @@ export class AIBridge {
 
     // Get default parameters for Chrome 138+
     let defaultParams = {};
-      try {
-        defaultParams = await LanguageModel.params();
-      } catch (e) {
-        console.warn('[AI-BRIDGE] Could not get default parameters:', e);
-      }
+    try {
+      defaultParams = await LanguageModel.params();
+    } catch (e) {
+      console.warn('[AI-BRIDGE] Could not get default parameters:', e);
+    }
 
     this.capabilities = {
       languageModel: {
@@ -62,9 +62,9 @@ export class AIBridge {
   async isLanguageModelAvailable() {
     await this.initialize();
     return this.capabilities?.languageModel?.ready ||
-           this.capabilities?.languageModel?.available === 'readily' ||
-           this.capabilities?.languageModel?.available === 'available' ||
-           this.capabilities?.languageModel?.available === 'downloadable';
+      this.capabilities?.languageModel?.available === 'readily' ||
+      this.capabilities?.languageModel?.available === 'available' ||
+      this.capabilities?.languageModel?.available === 'downloadable';
   }
 
   /**
@@ -73,9 +73,9 @@ export class AIBridge {
   async isSummarizerAvailable() {
     await this.initialize();
     return this.capabilities?.summarizer?.ready ||
-           this.capabilities?.summarizer?.available === 'readily' ||
-           this.capabilities?.summarizer?.available === 'available' ||
-           this.capabilities?.summarizer?.available === 'downloadable';
+      this.capabilities?.summarizer?.available === 'readily' ||
+      this.capabilities?.summarizer?.available === 'available' ||
+      this.capabilities?.summarizer?.available === 'downloadable';
   }
 
   /**
@@ -129,15 +129,11 @@ export class AIBridge {
 
 Your responsibilities:
 1. Answer questions based ONLY on the provided browsing history snippets
-2. Always include clickable links when referencing specific pages
-3. Keep responses concise and helpful (2-4 sentences typically)
-4. If no relevant information is found, say so clearly
-5. Use markdown formatting for better readability
+2. Keep responses brief and concise
+3. If no relevant information is found, say so clearly
 
 Format guidelines:
 - Use **bold** for emphasis
-- Include links as [Page Title](URL)
-- Use bullet points for lists
 - Be direct and actionable
 
 Remember: You can only reference information from the provided browsing history context.`;
@@ -227,14 +223,13 @@ Remember: You can only reference information from the provided browsing history 
 
     const results = searchResults.slice(0, maxResults);
 
-    return results.map((result, index) => {
+    return results.map((result) => {
       const title = result.title || 'Untitled';
       const url = result.url;
       const content = result.summary || result.snippet || result.content_text || '';
       const trimmedContent = content.length > 200 ? content.substring(0, 200) + '...' : content;
 
-      return `${index + 1}. **${title}**
-   URL: ${url}
+      return `Title: **${title}**
    Content: ${trimmedContent}`;
     }).join('\n\n');
   }

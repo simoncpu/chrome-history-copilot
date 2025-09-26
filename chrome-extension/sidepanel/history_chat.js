@@ -123,7 +123,7 @@ async function setupPermissionsOnboarding() {
           granted = await chrome.permissions.request({ origins: ['http://*/*'] });
         }
         if (granted) overlay.classList.add('hidden');
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
@@ -225,7 +225,7 @@ async function handleChatSubmit(e) {
   const message = chatInput.value.trim();
   if (!message || isGenerating) return;
 
-  
+
 
   // Clear input and reset height
   chatInput.value = '';
@@ -320,8 +320,19 @@ async function processChatRequest(userMessage) {
       console.log('[CHAT] Step 2 complete: Search results analyzed:', {
         resultCount: searchResults?.length || 0,
         quality: searchQuality?.quality,
-        avgScore: searchQuality?.avgScore
+        avgScore: searchQuality?.avgScore,
+        highScoreCount: searchResults?.filter(r => (r.score || r.finalScore || 0) >= 0.6).length || 0
       });
+
+      // Log which results will be used by the AI
+      if (searchResults && searchResults.length > 0) {
+        console.log('[CHAT] Top search results that will be sent to AI:');
+        searchResults.slice(0, 8).forEach((result, index) => {
+          const score = result.score || result.finalScore || result.similarity || 0;
+          const confidence = score >= 0.6 ? 'HIGH' : score >= 0.3 ? 'MED' : 'LOW';
+          console.log(`  AI-${index + 1}. [${confidence}] "${result.title}" (${(score * 100).toFixed(1)}%)`);
+        });
+      }
     } else {
       console.log('[CHAT] Step 2: User is chatting - skipping search');
       updateChatProgress('Preparing conversational response...');
@@ -330,7 +341,7 @@ async function processChatRequest(userMessage) {
     // Step 3: Generate AI response with appropriate context
     console.log('[CHAT] Step 3: Generating AI response...');
     updateChatProgress('Generating AI response...');
-    const response = await generateAIResponseWithIntent(
+    const response = await generateAIResponse(
       userMessage,
       extractedKeywords.is_search_query,
       searchResults,
@@ -351,14 +362,22 @@ async function processChatRequest(userMessage) {
 
 async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
   try {
+    // Use extracted keywords as the search query instead of original message
+    const keywordsQuery = extractedKeywords.keywords?.join(' ') || originalQuery;
+
+    console.log('[CHAT-DEBUG] Original query:', originalQuery);
+    console.log('[CHAT-DEBUG] Extracted keywords:', extractedKeywords);
+    console.log('[CHAT-DEBUG] Search query (keywords joined):', keywordsQuery);
+
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
       type: 'search',
       data: {
-        query: originalQuery,
-        keywords: extractedKeywords,
+        query: keywordsQuery,
+        // Commented out keyword boosting to match history_search.js behavior
+        // keywords: extractedKeywords,
         mode: 'hybrid-rerank',
-        limit: 10
+        limit: 25
       }
     });
 
@@ -366,8 +385,27 @@ async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
       throw new Error(response.error);
     }
 
-    console.log('[CHAT] Search results:', response.results?.length || 0, 'pages found');
-    return response.results || [];
+    const results = response.results || [];
+    console.log('[CHAT] Search results:', results.length, 'pages found');
+
+    // Log detailed search results with scores and order
+    if (results.length > 0) {
+      console.log('[CHAT] Detailed search results (sorted by relevance):');
+      results.forEach((result, index) => {
+        const score = result.score || result.finalScore || result.similarity || 0;
+        const source = result.source || (result.summary ? 'PGlite' : 'Browser');
+        console.log(`  ${index + 1}. [${source}] "${result.title}" (score: ${(score * 100).toFixed(1)}%)`);
+        console.log(`     URL: ${result.url}`);
+        if (result.summary) {
+          console.log(`     Summary: ${result.summary.substring(0, 100)}...`);
+        } else if (result.snippet) {
+          console.log(`     Snippet: ${result.snippet.substring(0, 100)}...`);
+        }
+        console.log(''); // Empty line for readability
+      });
+    }
+
+    return results;
   } catch (error) {
     console.error('[CHAT] History search failed:', error);
     return [];
@@ -398,18 +436,8 @@ async function searchHistory(query) {
   }
 }
 
-async function generateAIResponse(userMessage, searchResults, onProgress = null) {
-  await aiBridge.initialize(onProgress);
 
-  if (!aiBridge.isReady()) {
-    throw new Error('Chrome AI is not available - ensure Chrome Canary with AI flags enabled');
-  }
-
-  console.log('[CHAT] Using Chrome AI for response generation');
-  return await generateWithChromeAI(userMessage, searchResults);
-}
-
-async function generateAIResponseWithIntent(userMessage, isSearchQuery, searchResults, searchQuality, onProgress = null) {
+async function generateAIResponse(userMessage, isSearchQuery, searchResults, searchQuality, onProgress = null) {
   await aiBridge.initialize(onProgress);
 
   if (!aiBridge.isReady()) {
@@ -417,17 +445,18 @@ async function generateAIResponseWithIntent(userMessage, isSearchQuery, searchRe
   }
 
   console.log('[CHAT] Using Chrome AI for intent-aware response generation');
-  return await generateWithChromeAIAndIntent(userMessage, isSearchQuery, searchResults, searchQuality);
+  return await generateWithChromeAI(userMessage, isSearchQuery, searchResults, searchQuality);
 }
 
-async function generateWithChromeAI(userMessage, searchResults) {
+
+async function generateWithChromeAI(userMessage, isSearchQuery, searchResults, searchQuality) {
   try {
-    console.log('[CHAT] generateWithChromeAI: Starting response generation...');
+    console.log('[CHAT] generateWithChromeAI: Starting intent-aware response generation...');
 
     // Create session with initialPrompts containing recent chat history
     if (!aiSession) {
       console.log('[CHAT] generateWithChromeAI: Creating new AI session...');
-      const recentMessages = getRecentMessagesForSession(24); // Get up to 24 recent messages for context
+      const recentMessages = getRecentMessagesForSession(); // Get recent messages with intent-aware context
       console.log('[CHAT] generateWithChromeAI: Using', recentMessages.length, 'recent messages for context');
 
       aiSession = await aiBridge.createLanguageSession({
@@ -438,12 +467,34 @@ async function generateWithChromeAI(userMessage, searchResults) {
       console.log('[CHAT] generateWithChromeAI: Using existing AI session');
     }
 
-    // Build search context for appending
-    console.log('[CHAT] generateWithChromeAI: Building search context with', searchResults?.length || 0, 'results...');
-    const searchContext = buildSearchContext(searchResults);
-    console.log('[CHAT] generateWithChromeAI: Search context built, length:', searchContext?.length || 0, 'characters');
+    let searchContext = '';
 
-    // Use append() to add search context, then generate response
+    // Determine what context to provide based on search intent and quality
+    if (!isSearchQuery) {
+      // User is just chatting, don't append any search context
+      console.log('[CHAT] generateWithChromeAI: No search intent - conversational response');
+      searchContext = ''; // No search context for casual conversation
+    } else {
+      // User is searching for something
+      if (searchResults.length === 0 || searchQuality.quality === 'none') {
+        // No results found
+        console.log('[CHAT] generateWithChromeAI: Search intent but no results found');
+        searchContext = 'SEARCH_STATUS: No relevant results found in browsing history for this search.';
+      } else if (searchQuality.quality === 'low') {
+        // Low confidence results
+        console.log('[CHAT] generateWithChromeAI: Search intent with low confidence results');
+        searchContext = 'SEARCH_STATUS: Found potentially relevant results but confidence is low. Suggest these with uncertainty.\n\n' +
+          buildSearchContext(searchResults, searchQuality);
+      } else {
+        // High confidence results
+        console.log('[CHAT] generateWithChromeAI: Search intent with high confidence results');
+        searchContext = buildSearchContext(searchResults, searchQuality);
+      }
+    }
+
+    console.log('[CHAT] generateWithChromeAI: Context prepared, length:', searchContext?.length || 0, 'characters');
+
+    // Use append() to add search context (if any), then generate response
     console.log('[CHAT] generateWithChromeAI: Calling aiBridge.generateResponse...');
     const response = await aiBridge.generateResponse(userMessage, searchContext);
     console.log('[CHAT] generateWithChromeAI: Response received, length:', response?.length || 0, 'characters');
@@ -455,129 +506,45 @@ async function generateWithChromeAI(userMessage, searchResults) {
   }
 }
 
-async function generateWithChromeAIAndIntent(userMessage, isSearchQuery, searchResults, searchQuality) {
-  try {
-    console.log('[CHAT] generateWithChromeAIAndIntent: Starting intent-aware response generation...');
-
-    // Create session with initialPrompts containing recent chat history
-    if (!aiSession) {
-      console.log('[CHAT] generateWithChromeAIAndIntent: Creating new AI session...');
-      const recentMessages = getRecentMessagesForSessionWithIntent(); // Updated to handle search intent
-      console.log('[CHAT] generateWithChromeAIAndIntent: Using', recentMessages.length, 'recent messages for context');
-
-      aiSession = await aiBridge.createLanguageSession({
-        initialPrompts: recentMessages
-      });
-      console.log('[CHAT] generateWithChromeAIAndIntent: AI session created successfully');
-    } else {
-      console.log('[CHAT] generateWithChromeAIAndIntent: Using existing AI session');
-    }
-
-    let searchContext = '';
-
-    // Determine what context to provide based on search intent and quality
-    if (!isSearchQuery) {
-      // User is just chatting, don't append any search context
-      console.log('[CHAT] generateWithChromeAIAndIntent: No search intent - conversational response');
-      searchContext = ''; // No search context for casual conversation
-    } else {
-      // User is searching for something
-      if (searchResults.length === 0 || searchQuality.quality === 'none') {
-        // No results found
-        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent but no results found');
-        searchContext = 'SEARCH_STATUS: No relevant results found in browsing history for this search.';
-      } else if (searchQuality.quality === 'low') {
-        // Low confidence results
-        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent with low confidence results');
-        searchContext = 'SEARCH_STATUS: Found potentially relevant results but confidence is low. Suggest these with uncertainty.\n\n' +
-          buildSearchContext(searchResults, searchQuality);
-      } else {
-        // High confidence results
-        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent with high confidence results');
-        searchContext = buildSearchContext(searchResults, searchQuality);
-      }
-    }
-
-    console.log('[CHAT] generateWithChromeAIAndIntent: Context prepared, length:', searchContext?.length || 0, 'characters');
-
-    // Use append() to add search context (if any), then generate response
-    console.log('[CHAT] generateWithChromeAIAndIntent: Calling aiBridge.generateResponse...');
-    const response = await aiBridge.generateResponse(userMessage, searchContext);
-    console.log('[CHAT] generateWithChromeAIAndIntent: Response received, length:', response?.length || 0, 'characters');
-
-    return response;
-  } catch (error) {
-    console.error('[CHAT] generateWithChromeAIAndIntent: Error during response generation:', error);
-    throw error;
-  }
-}
 
 function getRecentMessagesForSession(maxMessages = 24) {
-  // Return recent chat history in initialPrompts format
-  const messages = [];
-
-  // Add system prompt first
-  messages.push({
-    role: 'system',
-    content: `You are an AI assistant that helps users find information from their browsing history.
-
-Your responsibilities:
-1. Answer questions based ONLY on the provided browsing history snippets
-2. Always include clickable links when referencing specific pages
-3. Keep responses concise and helpful (2-4 sentences typically)
-4. If no relevant information is found, say so clearly
-5. Use markdown formatting for better readability
-
-Format guidelines:
-- Use **bold** for emphasis
-- Include links as [Page Title](URL)
-- Use bullet points for lists
-- Be direct and actionable
-
-Remember: You can only reference information from the provided browsing history context.`
-  });
-
-  // Add recent chat messages, limiting by maxMessages and rough token count
-  const recentHistory = chatHistory.slice(-maxMessages);
-  for (const msg of recentHistory) {
-    if (messages.length >= maxMessages) break;
-
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content
-    });
-  }
-
-  return messages;
-}
-
-function getRecentMessagesForSessionWithIntent(maxMessages = 24) {
   // Return recent chat history with updated system prompt for intent-aware responses
   const messages = [];
 
   // Add updated system prompt for intent-aware behavior
   messages.push({
     role: 'system',
-    content: `You are an AI assistant that helps users with both casual conversation and finding information from their browsing history.
+    //     return `You are an AI assistant that helps users find information from their browsing history.
+
+    // Your responsibilities:
+    // 1. Answer questions based ONLY on the provided browsing history snippets
+    // 2. Keep responses brief and concise
+    // 3. If no relevant information is found, say so clearly
+
+    // Format guidelines:
+    // - Use **bold** for emphasis
+    // - Be direct and actionable
+
+    // Remember: You can only reference information from the provided browsing history context.`;
+    content: `You are an AI assistant that helps users with both general conversation and finding information from their browsing history.
 
 Your responsibilities:
 
-**For casual conversation (greetings, thanks, general chat):**
+**For general conversation:**
 - Respond naturally and helpfully without mentioning browsing history
 - Be friendly and engaging
 - Don't try to search or reference browsing history
 
 **For search queries (when browsing history context is provided):**
 - If SEARCH_STATUS indicates "No relevant results found": Tell the user you couldn't find anything in their browsing history about that topic
-- If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results, saying "I'm not entirely sure, but here are some potentially relevant pages I found"
-- For high-confidence results: Present them confidently with clickable URLs
-- Always include clickable URLs when relevant pages are found: [Page Title](URL)
-- Be concise but thorough in explanations
+- If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results
+- For high-confidence results: Present them confidently.
 
 **Response guidelines:**
-- Format responses with proper markdown for links
+- Format responses as plain text only. Do not inlclude any links or HTML
 - Only reference information that has been provided to you
 - Match the user's tone (casual vs. informational)
+- Keep responses brief and concise
 - Be transparent about search result quality`
   });
 
@@ -639,7 +606,10 @@ function analyzeSearchQuality(searchResults) {
 }
 
 function buildSearchContext(searchResults, quality = null) {
+  console.log('[CHAT] buildSearchContext: Building context for AI with', searchResults?.length || 0, 'results');
+
   if (searchResults.length === 0) {
+    console.log('[CHAT] buildSearchContext: No results - returning empty search message');
     return 'No relevant browsing history found for your search.';
   }
 
@@ -647,6 +617,12 @@ function buildSearchContext(searchResults, quality = null) {
   if (!quality) {
     quality = analyzeSearchQuality(searchResults);
   }
+
+  console.log('[CHAT] buildSearchContext: Quality analysis:', {
+    quality: quality.quality,
+    avgScore: quality.avgScore?.toFixed(3),
+    resultsToInclude: Math.min(searchResults.length, 3)
+  });
 
   let context = '';
 
@@ -657,37 +633,35 @@ function buildSearchContext(searchResults, quality = null) {
     context += 'Found relevant browsing history:\n\n';
   }
 
-  searchResults.slice(0, 8).forEach((result, index) => {
+  const contextResults = searchResults.slice(0, 3);
+  console.log('[CHAT] buildSearchContext: Final AI context will include these results (in order):');
+
+  contextResults.forEach((result, index) => {
     const score = result.score || result.similarity || result.finalScore || 0;
-    context += `${index + 1}. ${result.title}`;
+    const confidenceLabel = score >= 0.6 ? 'HIGH' : score >= 0.3 ? 'MED' : 'LOW';
+
+    console.log(`  CONTEXT-${index + 1}. [${confidenceLabel}] "${result.title}" (${(score * 100).toFixed(1)}%) - ${result.url}`);
+
+    context += `Title: **${result.title}**`;
     if (quality.quality === 'high' && score >= 0.6) {
       context += ` (high confidence: ${(score * 100).toFixed(0)}%)`;
     } else if (quality.quality === 'low') {
       context += ` (low confidence: ${(score * 100).toFixed(0)}%)`;
     }
-    context += `\n   URL: ${result.url}\n`;
+    context += `\n`;
     if (result.summary || result.snippet) {
-      context += `   Content: ${(result.summary || result.snippet).substring(0, 200)}...\n`;
+      const content = result.summary || result.snippet;
+      context += `   Content: ${content}\n`;
     }
     context += '\n';
   });
 
+  console.log('[CHAT] buildSearchContext: Context built, total length:', context.length, 'characters');
+  console.log('[CHAT] buildSearchContext: Context preview:', context);
+
   return context;
 }
 
-function buildChatTurnsContext(maxTurns = 10, maxChars = 2000) {
-  if (!Array.isArray(chatHistory) || chatHistory.length === 0) return '';
-  const recent = chatHistory.slice(-maxTurns);
-  let buf = 'Recent chat context (most recent last):\n\n';
-  for (const msg of recent) {
-    const role = msg.role === 'user' ? 'User' : 'Assistant';
-    const text = String(msg.content || '').replace(/\s+/g, ' ').trim();
-    const line = `${role}: ${text}\n`;
-    if ((buf.length + line.length) > maxChars) break;
-    buf += line;
-  }
-  return buf;
-}
 
 
 function addAssistantMessage(content, searchResults = []) {
@@ -704,7 +678,13 @@ function addAssistantMessage(content, searchResults = []) {
         ${searchResults.slice(0, 5).map(result => `
           <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
             <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
-            <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
+            <div class="message-link-content">
+              <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
+              ${result.summary || result.snippet ?
+        `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
+        ''
+      }
+            </div>
           </a>
         `).join('')}
       </div>
@@ -744,16 +724,10 @@ function addErrorMessage(message) {
 }
 
 function processMessageContent(content) {
-  // Convert markdown-style links to HTML links
-  content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-
-  // Convert URLs to clickable links
-  content = content.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-
   // Convert line breaks to HTML
   content = content.replace(/\n/g, '<br>');
 
-  // Convert **bold** to HTML
+  // Convert **bold** to HTML (used for titles per system prompt)
   content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
   return content;
@@ -1315,5 +1289,11 @@ window.chatPageController = {
   chatHistory,
   aiSession,
   checkQueueStatus,
-  isProcessingPages
+  isProcessingPages,
+  // Export production functions for debug.js testing
+  processChatRequest,
+  searchHistoryWithKeywords,
+  buildSearchContext,
+  generateAIResponse,
+  analyzeSearchQuality
 };

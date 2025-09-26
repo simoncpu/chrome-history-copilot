@@ -27,6 +27,7 @@ let chatHistory = [];
 let aiSession = null;
 let isProcessingPages = false;
 let queueStatusInterval = null;
+let isLoadingHistory = false;
 const CHAT_THREAD_ID = 'default';
 
 // Feature flags
@@ -1017,7 +1018,20 @@ function startModelWarmWatcherChat(timeoutMs = 120000) {
 
 // Chat history persistence
 async function loadChatHistory() {
+  if (isLoadingHistory) {
+    console.log('[CHAT] loadChatHistory: Already loading, skipping duplicate call');
+    return;
+  }
+
   try {
+    isLoadingHistory = true;
+    console.log('[CHAT] loadChatHistory: Starting to load chat history');
+
+    // Clear existing messages (except welcome message) before loading history
+    const existingMessages = chatMessages.querySelectorAll('.message:not(#welcomeMessage)');
+    console.log('[CHAT] loadChatHistory: Clearing', existingMessages.length, 'existing messages before loading history');
+    existingMessages.forEach(message => message.remove());
+
     // Load chat messages from PGlite database
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -1032,13 +1046,15 @@ async function loadChatHistory() {
 
     const messages = response.messages || [];
     chatHistory = messages;
+    console.log('[CHAT] loadChatHistory: Loading', messages.length, 'messages from database');
 
     // Restore messages in UI
-    messages.forEach(message => {
+    messages.forEach((message, index) => {
+      console.log('[CHAT] loadChatHistory: Adding message', index + 1, 'of', messages.length, '- Role:', message.role);
       if (message.role === 'user') {
         addUserMessageFromHistory(message.content);
       } else if (message.role === 'assistant') {
-        addAssistantMessage(message.content, []);
+        addAssistantMessageFromHistory(message.content);
       }
     });
 
@@ -1049,6 +1065,9 @@ async function loadChatHistory() {
     scrollToBottom();
   } catch (error) {
     console.error('[CHAT] Failed to load chat history:', error);
+  } finally {
+    isLoadingHistory = false;
+    console.log('[CHAT] loadChatHistory: Finished loading chat history');
   }
 }
 
@@ -1091,13 +1110,26 @@ function addUserMessageFromHistory(content) {
     </div>
   `;
 
-  // Insert before the welcome message
-  const welcomeMessage = chatMessages.querySelector('#welcomeMessage');
-  if (welcomeMessage) {
-    chatMessages.insertBefore(messageDiv, welcomeMessage);
-  } else {
-    chatMessages.appendChild(messageDiv);
-  }
+  // Append after the welcome message (messages load in chronological order)
+  chatMessages.appendChild(messageDiv);
+}
+
+function addAssistantMessageFromHistory(content) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message assistant-message';
+
+  // Process content to make links clickable
+  const processedContent = processMessageContent(content);
+
+  messageDiv.innerHTML = `
+    <div class="message-avatar">🤖</div>
+    <div class="message-content">
+      <div class="message-text">${processedContent}</div>
+    </div>
+  `;
+
+  // Append after the welcome message (messages load in chronological order)
+  chatMessages.appendChild(messageDiv);
 }
 
 async function handleClearChat() {

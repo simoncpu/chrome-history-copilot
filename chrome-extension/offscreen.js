@@ -39,7 +39,7 @@ const OFFSCREEN_MESSAGE_TYPES = new Set([
   'ping', 'refresh-ai-prefs', 'reload-embeddings', 'get-model-status',
   'start-remote-warm', 'get-summary-queue-stats', 'process-summary-queue',
   'clear-summary-queue', 'save-chat-message', 'get-chat-messages', 'clear-chat-thread',
-  'get-chat-thread-stats'
+  'get-chat-thread-stats', 'deduplicate-chat-messages'
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -256,6 +256,16 @@ async function handleMessage(message, sendResponse) {
         try {
           const stats = await db.getChatThreadStats();
           sendResponse({ stats });
+        } catch (error) {
+          sendResponse({ error: error.message });
+        }
+        break;
+
+      case 'deduplicate-chat-messages':
+        try {
+          const { threadId = 'default' } = message.data || {};
+          const removedCount = await db.deduplicateChatMessages(threadId);
+          sendResponse({ removedCount, success: true });
         } catch (error) {
           sendResponse({ error: error.message });
         }
@@ -1023,7 +1033,23 @@ class DatabaseWrapper {
     try {
       await this.ensureChatThread(threadId);
 
+      // Check for recent duplicate messages (within last 60 seconds with same content)
+      const duplicateCheck = await this.db.query(`
+        SELECT id FROM chat_message
+        WHERE thread_id = $1
+          AND role = $2
+          AND content = $3
+          AND created_at > NOW() - INTERVAL '60 seconds'
+        LIMIT 1
+      `, [threadId, role, content]);
+
+      if (duplicateCheck.rows.length > 0) {
+        console.log('[DB] Duplicate message detected, skipping save:', duplicateCheck.rows[0].id);
+        return duplicateCheck.rows[0].id;
+      }
+
       const messageId = `${threadId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      console.log('[DB] Saving new chat message:', messageId, 'role:', role, 'content length:', content.length);
 
       await this.db.query(`
         INSERT INTO chat_message (id, thread_id, role, content)
@@ -1081,6 +1107,28 @@ class DatabaseWrapper {
       return result.rowCount || 0;
     } catch (error) {
       console.error('[DB] Failed to clear chat thread:', error);
+      return 0;
+    }
+  }
+
+  async deduplicateChatMessages(threadId = 'default') {
+    try {
+      // Remove duplicate messages keeping only the earliest one for each content+role combination
+      const result = await this.db.query(`
+        DELETE FROM chat_message
+        WHERE id NOT IN (
+          SELECT MIN(id)
+          FROM chat_message
+          WHERE thread_id = $1
+          GROUP BY role, content
+        )
+        AND thread_id = $1
+      `, [threadId]);
+
+      console.log('[DB] Removed', result.rowCount || 0, 'duplicate messages');
+      return result.rowCount || 0;
+    } catch (error) {
+      console.error('[DB] Failed to deduplicate chat messages:', error);
       return 0;
     }
   }

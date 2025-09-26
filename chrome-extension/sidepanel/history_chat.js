@@ -28,6 +28,7 @@ let aiSession = null;
 let isProcessingPages = false;
 let queueStatusInterval = null;
 let isLoadingHistory = false;
+let isInitialized = false;
 const CHAT_THREAD_ID = 'default';
 
 // Feature flags
@@ -37,6 +38,13 @@ let shouldDisableInputDuringProcessing = false;  // Default: don't disable input
 document.addEventListener('DOMContentLoaded', initializeChatPage);
 
 function initializeChatPage() {
+  if (isInitialized) {
+    console.log('[CHAT] initializeChatPage: Already initialized, skipping duplicate call');
+    return;
+  }
+
+  console.log('[CHAT] initializeChatPage: Starting initialization');
+  isInitialized = true;
 
   // Get DOM elements
   chatMessages = document.getElementById('chatMessages');
@@ -225,6 +233,7 @@ async function handleChatSubmit(e) {
 
   const message = chatInput.value.trim();
   if (!message || isGenerating) return;
+
 
 
 
@@ -1032,6 +1041,20 @@ async function loadChatHistory() {
     console.log('[CHAT] loadChatHistory: Clearing', existingMessages.length, 'existing messages before loading history');
     existingMessages.forEach(message => message.remove());
 
+    // Deduplicate any existing duplicates in the database
+    try {
+      const dedupeResponse = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'deduplicate-chat-messages',
+        data: { threadId: CHAT_THREAD_ID }
+      });
+      if (dedupeResponse.removedCount > 0) {
+        console.log('[CHAT] loadChatHistory: Removed', dedupeResponse.removedCount, 'duplicate messages from database');
+      }
+    } catch (error) {
+      console.warn('[CHAT] loadChatHistory: Failed to deduplicate messages:', error);
+    }
+
     // Load chat messages from PGlite database
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -1073,6 +1096,8 @@ async function loadChatHistory() {
 
 async function saveChatMessage(role, content) {
   try {
+    console.log('[CHAT] saveChatMessage: Called with role:', role, 'content length:', content.length);
+
     // Save message to PGlite database
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -1093,7 +1118,7 @@ async function saveChatMessage(role, content) {
       timestamp: Date.now()
     });
 
-    console.log('[CHAT] Message saved:', response.messageId);
+    console.log('[CHAT] Message saved successfully:', response.messageId, 'Total local history:', chatHistory.length);
   } catch (error) {
     console.error('[CHAT] Failed to save chat message:', error);
   }

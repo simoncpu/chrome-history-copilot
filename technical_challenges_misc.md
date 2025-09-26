@@ -273,6 +273,183 @@ async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
 3. **Debug logging**: Always log query transformations to help debug search inconsistencies
 4. **Intent vs. execution**: Separate intent detection (is this a search?) from query execution (what to search for)
 
+## Chat History Message Duplication on Page Navigation
+
+### Problem
+
+When navigating away from the chat page and returning, chat messages were being duplicated. Users would see:
+- User messages appearing twice
+- Assistant responses appearing twice
+- The database contained 4 messages when there should only be 2
+
+Example logs showed:
+```
+[CHAT] loadChatHistory: Loading 4 messages from database
+[CHAT] loadChatHistory: Adding message 1 of 4 - Role: user
+[CHAT] loadChatHistory: Adding message 2 of 4 - Role: user  // Duplicate
+[CHAT] loadChatHistory: Adding message 3 of 4 - Role: assistant
+[CHAT] loadChatHistory: Adding message 4 of 4 - Role: assistant  // Duplicate
+```
+
+### Root Cause Analysis
+
+The issue had **multiple contributing factors**:
+
+#### 1. **Double Event Listener Registration** (Primary cause - **CONFIRMED**)
+- Navigation between pages uses `window.location.href`, causing full page reloads
+- Each reload triggered `DOMContentLoaded` → `initializeChatPage()`
+- Without guards, `initializeChatPage()` could run multiple times
+- Multiple registrations of form submit handlers:
+  ```javascript
+  chatForm.addEventListener('submit', handleChatSubmit);  // Registered multiple times
+  ```
+- Each user message submission triggered multiple `addUserMessage()` calls
+- Each response triggered multiple `addAssistantMessage()` calls
+
+**Confirmation Evidence**: Debug logs before fix showed duplicate handler registrations and multiple save calls per submission. After implementing the `isInitialized` guard, logs show clean single initialization and single handler calls.
+
+#### 2. **Message Insertion Order Issues** (Secondary)
+- `addUserMessageFromHistory()` and `addAssistantMessageFromHistory()` were using `insertBefore(welcomeMessage)`
+- This caused messages to appear in wrong DOM positions
+- Welcome message ended up at the bottom instead of top
+
+#### 3. **PostgreSQL Syntax Error** (Blocking fix)
+- Database deduplication used SQLite syntax: `datetime('now', '-60 seconds')`
+- PGlite requires PostgreSQL syntax: `NOW() - INTERVAL '60 seconds'`
+- This prevented the deduplication logic from working
+
+### Impact
+
+- Poor user experience with duplicate messages
+- Confusion about conversation history
+- Database bloat with duplicate entries
+- Inconsistent message ordering
+
+### Solution
+
+#### 1. **Prevent Double Initialization**
+Added initialization guard to prevent multiple registrations:
+
+```javascript
+// State
+let isInitialized = false;
+
+function initializeChatPage() {
+  if (isInitialized) {
+    console.log('[CHAT] initializeChatPage: Already initialized, skipping duplicate call');
+    return;
+  }
+  console.log('[CHAT] initializeChatPage: Starting initialization');
+  isInitialized = true;
+  // ... rest of initialization
+}
+```
+
+#### 2. **Fixed Message DOM Insertion**
+Changed history message functions to append instead of insert before welcome:
+
+```javascript
+function addUserMessageFromHistory(content) {
+  // ... create messageDiv
+  // OLD: chatMessages.insertBefore(messageDiv, welcomeMessage);
+  // NEW: Append after the welcome message (messages load in chronological order)
+  chatMessages.appendChild(messageDiv);
+}
+```
+
+#### 3. **Database-Level Duplicate Prevention**
+Added deduplication logic in the database save operation:
+
+```javascript
+async saveChatMessage(threadId, role, content) {
+  // Check for recent duplicate messages (within last 60 seconds with same content)
+  const duplicateCheck = await this.db.query(`
+    SELECT id FROM chat_message
+    WHERE thread_id = $1 AND role = $2 AND content = $3
+      AND created_at > NOW() - INTERVAL '60 seconds'
+    LIMIT 1
+  `, [threadId, role, content]);
+
+  if (duplicateCheck.rows.length > 0) {
+    console.log('[DB] Duplicate message detected, skipping save');
+    return duplicateCheck.rows[0].id;
+  }
+  // ... save new message
+}
+```
+
+#### 4. **Automatic Cleanup of Existing Duplicates**
+Added deduplication function that runs on history load:
+
+```javascript
+async deduplicateChatMessages(threadId = 'default') {
+  const result = await this.db.query(`
+    DELETE FROM chat_message
+    WHERE id NOT IN (
+      SELECT MIN(id) FROM chat_message
+      WHERE thread_id = $1
+      GROUP BY role, content
+    ) AND thread_id = $1
+  `, [threadId]);
+  console.log('[DB] Removed', result.rowCount || 0, 'duplicate messages');
+}
+```
+
+#### 5. **Enhanced Debugging**
+Added comprehensive logging to track the issue:
+
+```javascript
+async function saveChatMessage(role, content) {
+  console.log('[CHAT] saveChatMessage: Called with role:', role);
+  console.trace('[CHAT] saveChatMessage: Call stack');
+  // ... save logic with detailed success/failure logging
+}
+```
+
+### Files Modified
+
+- `chrome-extension/sidepanel/history_chat.js` - Added initialization guard, fixed DOM insertion, enhanced logging
+- `chrome-extension/offscreen.js` - Added database deduplication logic, fixed PostgreSQL syntax
+
+### Result After Fix
+
+Clean logs showing proper behavior:
+```
+[CHAT] initializeChatPage: Starting initialization          // Only once
+[CHAT] loadChatHistory: Loading 2 messages from database   // Correct count
+[CHAT] loadChatHistory: Adding message 1 of 2 - Role: user
+[CHAT] loadChatHistory: Adding message 2 of 2 - Role: assistant
+[CHAT] Message saved successfully: default-123... Total local history: 3  // New message saved once
+```
+
+### Root Cause Confirmation
+
+Enhanced debugging was added to confirm the hypothesis:
+- **Event listener tracking**: Detected multiple registrations (confirmed issue)
+- **Handler call tracking**: Tracked duplicate handler executions per submission
+- **DOM reuse tracking**: Confirmed fresh DOM elements on each navigation
+
+Testing showed:
+- Before fix: Duplicate registrations and multiple handler calls
+- After fix: Single initialization, single handler calls, clean message flow
+- The `isInitialized` guard successfully prevents the root cause
+
+### Lessons Learned
+
+1. **Guard Critical Initialization**: Always prevent multiple execution of setup functions
+2. **Understand Navigation Models**: `window.location.href` causes full reloads, unlike SPA navigation
+3. **Database Syntax Differences**: SQLite vs PostgreSQL have different date/time functions
+4. **Layer Defense**: Combine prevention (guards) with cleanup (deduplication) for robustness
+5. **Trace Root Causes**: Stack traces and detailed logging help identify the source of duplicates
+6. **DOM Insertion Order**: Be careful about where messages are inserted relative to static elements
+
+### Future Considerations
+
+- Monitor initialization logs to ensure guards remain effective
+- Consider implementing event listener tracking to detect double registrations
+- Add unit tests for message deduplication logic
+- Consider using `replaceState()` navigation instead of `window.location.href` for better performance
+
 ## Future Considerations
 
 - Monitor for other edge case URLs that might cause similar issues

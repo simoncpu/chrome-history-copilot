@@ -1,7 +1,7 @@
 ## Overview
 LLM‑Powered Browser History (Chrome MV3 Side Panel)
 
-Scope: This AGENTS.md applies to everything under ai-history3/.
+Scope: This CLAUDE.md applies to everything under ./
 Audience: Engineers building the Chrome extension described here and agents editing files in this folder.
 
 ## Objectives
@@ -496,4 +496,3 @@ async function answerQuery(query) {
 - Ignore folders that are named prototype_*/ unless explicitly referenced.
 - Some code might still contain assumption that was left when we still used sqlite-wasm and sqlite-vec. Do not use that assumption. New assumption is that we're now using pglite with pgvector.
 - Do not read the WASM pglite library when debugging because it's too large. Browse online documentation instead. Show that you require more information so that I can assist.
-- add a task where we need to automatically prune pglite so that it will only store websites visited in the last 90 days.

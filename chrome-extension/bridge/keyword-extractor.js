@@ -18,21 +18,28 @@ export class KeywordExtractor {
       await this.createExtractionSession(onProgress);
     }
 
-    const instruction = `Extract search keywords from the user's natural language query.
+    const instruction = `Analyze the user's query to determine if they are searching for specific information or just chatting.
 
-Rules:
-- Return JSON only
+First, determine if this is a search query:
+- Search queries: "find pages about X", "show me articles on Y", "what did I read about Z", "my bookmarks on topic"
+- Non-search queries: "hello", "hi", "thanks", "how are you", "what can you do", casual conversation
+
+Then extract keywords only if it's a search query:
+
+Rules for keyword extraction (only when is_search_query=true):
 - Keep 1-5 concise keywords or phrases
 - Prefer nouns and noun-phrases; drop politeness words
 - Preserve quoted phrases exactly
 - Lowercase; lemmatize (cats -> cat)
 - Remove stopwords and filler (please, info, give me)
-- If nothing useful, return empty arrays
+
+If not a search query, set is_search_query=false and leave all arrays empty.
 
 User query: "${query}"
 
 Response must be valid JSON with this exact format:
 {
+  "is_search_query": true/false,
   "keywords": ["array", "of", "strings"],
   "phrases": ["exact phrases"],
   "must_include": ["required", "terms"],
@@ -71,7 +78,11 @@ Response must be valid JSON with this exact format:
         }
       }
 
-      // Post-process: ensure lowercase and trim
+      // Post-process: ensure lowercase and trim, and validate is_search_query
+      if (typeof extracted.is_search_query !== 'boolean') {
+        extracted.is_search_query = false;
+      }
+
       for (const key of ['keywords', 'phrases', 'must_include', 'must_exclude']) {
         extracted[key] = (extracted[key] || []).map(s => s.toLowerCase().trim()).filter(s => s.length > 0);
       }
@@ -140,28 +151,32 @@ Response must be valid JSON with this exact format:
       type: "object",
       additionalProperties: false,
       properties: {
+        is_search_query: {
+          type: "boolean",
+          description: "True if the user is searching for specific information, false if just chatting/greeting"
+        },
         keywords: {
           type: "array",
           items: { type: "string" },
-          description: "General search terms"
+          description: "General search terms (empty if not searching)"
         },
         phrases: {
           type: "array",
           items: { type: "string" },
-          description: "Exact phrases to search for"
+          description: "Exact phrases to search for (empty if not searching)"
         },
         must_include: {
           type: "array",
           items: { type: "string" },
-          description: "Terms that must be present"
+          description: "Terms that must be present (empty if not searching)"
         },
         must_exclude: {
           type: "array",
           items: { type: "string" },
-          description: "Terms that must not be present"
+          description: "Terms that must not be present (empty if not searching)"
         }
       },
-      required: ["keywords", "phrases", "must_include", "must_exclude"]
+      required: ["is_search_query", "keywords", "phrases", "must_include", "must_exclude"]
     };
   }
 

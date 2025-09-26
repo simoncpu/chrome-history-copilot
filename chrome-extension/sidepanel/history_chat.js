@@ -298,22 +298,45 @@ async function generateResponse(userMessage) {
 
 async function processChatRequest(userMessage) {
   try {
-    // Step 1: Extract keywords using Chrome AI
-    console.log('[CHAT] Step 1: Extracting keywords from query:', userMessage);
+    // Step 1: Extract keywords and determine intent using Chrome AI
+    console.log('[CHAT] Step 1: Analyzing query intent and extracting keywords:', userMessage);
     updateChatProgress('Waiting for Chrome AI to load...');
     const extractedKeywords = await keywordExtractor.extractKeywords(userMessage, updateChatProgress);
-    console.log('[CHAT] Step 1 complete: Keywords extracted:', extractedKeywords);
+    console.log('[CHAT] Step 1 complete: Intent analysis:', {
+      isSearch: extractedKeywords.is_search_query,
+      keywords: extractedKeywords
+    });
 
-    // Step 2: Search for relevant history items using keywords
-    console.log('[CHAT] Step 2: Searching history with keywords...');
-    updateChatProgress('Searching your browsing history...');
-    const searchResults = await searchHistoryWithKeywords(extractedKeywords, userMessage);
-    console.log('[CHAT] Step 2 complete: Found', searchResults?.length || 0, 'results');
+    let searchResults = [];
+    let searchQuality = null;
 
-    // Step 3: Generate AI response with context
-    console.log('[CHAT] Step 3: Generating AI response with', searchResults?.length || 0, 'context items...');
+    // Step 2: Search only if user is actually searching for something
+    if (extractedKeywords.is_search_query) {
+      console.log('[CHAT] Step 2: User is searching - performing history search...');
+      updateChatProgress('Searching your browsing history...');
+      searchResults = await searchHistoryWithKeywords(extractedKeywords, userMessage);
+      searchQuality = analyzeSearchQuality(searchResults);
+
+      console.log('[CHAT] Step 2 complete: Search results analyzed:', {
+        resultCount: searchResults?.length || 0,
+        quality: searchQuality?.quality,
+        avgScore: searchQuality?.avgScore
+      });
+    } else {
+      console.log('[CHAT] Step 2: User is chatting - skipping search');
+      updateChatProgress('Preparing conversational response...');
+    }
+
+    // Step 3: Generate AI response with appropriate context
+    console.log('[CHAT] Step 3: Generating AI response...');
     updateChatProgress('Generating AI response...');
-    const response = await generateAIResponse(userMessage, searchResults, updateChatProgress);
+    const response = await generateAIResponseWithIntent(
+      userMessage,
+      extractedKeywords.is_search_query,
+      searchResults,
+      searchQuality,
+      updateChatProgress
+    );
     console.log('[CHAT] Step 3 complete: Response generated, length:', response?.length || 0, 'characters');
 
     // Hide loading and show response
@@ -386,6 +409,17 @@ async function generateAIResponse(userMessage, searchResults, onProgress = null)
   return await generateWithChromeAI(userMessage, searchResults);
 }
 
+async function generateAIResponseWithIntent(userMessage, isSearchQuery, searchResults, searchQuality, onProgress = null) {
+  await aiBridge.initialize(onProgress);
+
+  if (!aiBridge.isReady()) {
+    throw new Error('Chrome AI is not available - ensure Chrome Canary with AI flags enabled');
+  }
+
+  console.log('[CHAT] Using Chrome AI for intent-aware response generation');
+  return await generateWithChromeAIAndIntent(userMessage, isSearchQuery, searchResults, searchQuality);
+}
+
 async function generateWithChromeAI(userMessage, searchResults) {
   try {
     console.log('[CHAT] generateWithChromeAI: Starting response generation...');
@@ -417,6 +451,63 @@ async function generateWithChromeAI(userMessage, searchResults) {
     return response;
   } catch (error) {
     console.error('[CHAT] generateWithChromeAI: Error during response generation:', error);
+    throw error;
+  }
+}
+
+async function generateWithChromeAIAndIntent(userMessage, isSearchQuery, searchResults, searchQuality) {
+  try {
+    console.log('[CHAT] generateWithChromeAIAndIntent: Starting intent-aware response generation...');
+
+    // Create session with initialPrompts containing recent chat history
+    if (!aiSession) {
+      console.log('[CHAT] generateWithChromeAIAndIntent: Creating new AI session...');
+      const recentMessages = getRecentMessagesForSessionWithIntent(); // Updated to handle search intent
+      console.log('[CHAT] generateWithChromeAIAndIntent: Using', recentMessages.length, 'recent messages for context');
+
+      aiSession = await aiBridge.createLanguageSession({
+        initialPrompts: recentMessages
+      });
+      console.log('[CHAT] generateWithChromeAIAndIntent: AI session created successfully');
+    } else {
+      console.log('[CHAT] generateWithChromeAIAndIntent: Using existing AI session');
+    }
+
+    let searchContext = '';
+
+    // Determine what context to provide based on search intent and quality
+    if (!isSearchQuery) {
+      // User is just chatting, don't append any search context
+      console.log('[CHAT] generateWithChromeAIAndIntent: No search intent - conversational response');
+      searchContext = ''; // No search context for casual conversation
+    } else {
+      // User is searching for something
+      if (searchResults.length === 0 || searchQuality.quality === 'none') {
+        // No results found
+        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent but no results found');
+        searchContext = 'SEARCH_STATUS: No relevant results found in browsing history for this search.';
+      } else if (searchQuality.quality === 'low') {
+        // Low confidence results
+        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent with low confidence results');
+        searchContext = 'SEARCH_STATUS: Found potentially relevant results but confidence is low. Suggest these with uncertainty.\n\n' +
+          buildSearchContext(searchResults, searchQuality);
+      } else {
+        // High confidence results
+        console.log('[CHAT] generateWithChromeAIAndIntent: Search intent with high confidence results');
+        searchContext = buildSearchContext(searchResults, searchQuality);
+      }
+    }
+
+    console.log('[CHAT] generateWithChromeAIAndIntent: Context prepared, length:', searchContext?.length || 0, 'characters');
+
+    // Use append() to add search context (if any), then generate response
+    console.log('[CHAT] generateWithChromeAIAndIntent: Calling aiBridge.generateResponse...');
+    const response = await aiBridge.generateResponse(userMessage, searchContext);
+    console.log('[CHAT] generateWithChromeAIAndIntent: Response received, length:', response?.length || 0, 'characters');
+
+    return response;
+  } catch (error) {
+    console.error('[CHAT] generateWithChromeAIAndIntent: Error during response generation:', error);
     throw error;
   }
 }
@@ -460,16 +551,121 @@ Remember: You can only reference information from the provided browsing history 
   return messages;
 }
 
-function buildSearchContext(searchResults) {
-  if (searchResults.length === 0) {
-    return 'No relevant browsing history found.';
+function getRecentMessagesForSessionWithIntent(maxMessages = 24) {
+  // Return recent chat history with updated system prompt for intent-aware responses
+  const messages = [];
+
+  // Add updated system prompt for intent-aware behavior
+  messages.push({
+    role: 'system',
+    content: `You are an AI assistant that helps users with both casual conversation and finding information from their browsing history.
+
+Your responsibilities:
+
+**For casual conversation (greetings, thanks, general chat):**
+- Respond naturally and helpfully without mentioning browsing history
+- Be friendly and engaging
+- Don't try to search or reference browsing history
+
+**For search queries (when browsing history context is provided):**
+- If SEARCH_STATUS indicates "No relevant results found": Tell the user you couldn't find anything in their browsing history about that topic
+- If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results, saying "I'm not entirely sure, but here are some potentially relevant pages I found"
+- For high-confidence results: Present them confidently with clickable URLs
+- Always include clickable URLs when relevant pages are found: [Page Title](URL)
+- Be concise but thorough in explanations
+
+**Response guidelines:**
+- Format responses with proper markdown for links
+- Only reference information that has been provided to you
+- Match the user's tone (casual vs. informational)
+- Be transparent about search result quality`
+  });
+
+  // Add recent chat messages, limiting by maxMessages and rough token count
+  const recentHistory = chatHistory.slice(-maxMessages);
+  for (const msg of recentHistory) {
+    if (messages.length >= maxMessages) break;
+
+    messages.push({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    });
   }
 
-  let context = 'Relevant browsing history:\n\n';
+  return messages;
+}
+
+/**
+ * Analyze the quality of search results based on similarity scores
+ * @param {Array} searchResults - Array of search results with score/similarity values
+ * @returns {Object} Quality analysis with quality level and average score
+ */
+function analyzeSearchQuality(searchResults) {
+  if (!searchResults || searchResults.length === 0) {
+    return { quality: 'none', avgScore: 0, count: 0 };
+  }
+
+  // Calculate average score from various possible score fields
+  const scores = searchResults.map(result => {
+    return result.score || result.similarity || result.finalScore || 0;
+  }).filter(score => typeof score === 'number' && score >= 0);
+
+  if (scores.length === 0) {
+    return { quality: 'low', avgScore: 0, count: searchResults.length };
+  }
+
+  const avgScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const maxScore = Math.max(...scores);
+
+  // Determine quality based on both average and max scores
+  // High quality: good average (>= 0.3) or at least one very high score (>= 0.6)
+  // Low quality: poor average (< 0.3) and no high scores
+  let quality;
+  if (avgScore >= 0.3 || maxScore >= 0.6) {
+    quality = 'high';
+  } else {
+    quality = 'low';
+  }
+
+  console.log('[CHAT] Search quality analysis:', { quality, avgScore, maxScore, count: searchResults.length });
+
+  return {
+    quality,
+    avgScore,
+    maxScore,
+    count: searchResults.length,
+    scores
+  };
+}
+
+function buildSearchContext(searchResults, quality = null) {
+  if (searchResults.length === 0) {
+    return 'No relevant browsing history found for your search.';
+  }
+
+  // Get quality info if not provided
+  if (!quality) {
+    quality = analyzeSearchQuality(searchResults);
+  }
+
+  let context = '';
+
+  // Add quality context based on confidence level
+  if (quality.quality === 'low') {
+    context += 'Found some potentially relevant browsing history, but matches have low confidence:\n\n';
+  } else {
+    context += 'Found relevant browsing history:\n\n';
+  }
 
   searchResults.slice(0, 8).forEach((result, index) => {
-    context += `${index + 1}. ${result.title}\n`;
-    context += `   URL: ${result.url}\n`;
+    const score = result.score || result.similarity || result.finalScore || 0;
+    context += `${index + 1}. ${result.title}`;
+    if (quality.quality === 'high' && score >= 0.6) {
+      context += ` (high confidence: ${(score * 100).toFixed(0)}%)`;
+    } else if (quality.quality === 'low') {
+      context += ` (low confidence: ${(score * 100).toFixed(0)}%)`;
+    }
+    context += `\n   URL: ${result.url}\n`;
     if (result.summary || result.snippet) {
       context += `   Content: ${(result.summary || result.snippet).substring(0, 200)}...\n`;
     }

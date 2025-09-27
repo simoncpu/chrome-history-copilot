@@ -303,6 +303,12 @@ async function generateResponse(userMessage) {
   isGenerating = true;
   updateUI();
 
+  // Disable search tab while generating
+  const searchTab = document.querySelector('.tab[data-page="search"]');
+  if (searchTab) {
+    searchTab.setAttribute('data-generating', 'true');
+  }
+
   // Show loading screen immediately - don't block browser
   showChatLoading();
   updateChatProgress('Initializing AI system...');
@@ -332,6 +338,13 @@ async function generateResponse(userMessage) {
   }).finally(() => {
     isGenerating = false;
     updateUI();
+
+    // Re-enable search tab
+    const searchTab = document.querySelector('.tab[data-page="search"]');
+    if (searchTab) {
+      searchTab.removeAttribute('data-generating');
+    }
+
     scrollToBottom(2, true);  // Final scroll to ensure response is visible
   });
 }

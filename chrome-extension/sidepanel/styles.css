@@ -273,6 +273,31 @@ body::before {
   filter: drop-shadow(0 1px 3px rgba(125, 211, 252, 0.4));
 }
 
+/* Subtle disabled state for tab while AI is generating */
+.tab[data-generating="true"] {
+  opacity: 0.65;
+  cursor: not-allowed;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+/* Prevent hover effects when disabled */
+.tab[data-generating="true"]:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(240, 249, 255, 0.6) 100%);
+  color: var(--text-secondary);
+  transform: none;
+  box-shadow: none;
+}
+
+.tab[data-generating="true"]:hover::before {
+  opacity: 0;
+}
+
+.tab[data-generating="true"]:hover .tab-icon {
+  opacity: 0.65;
+  transform: scale(1);
+}
+
 .tab-title {
   white-space: nowrap;
   overflow: hidden;

@@ -363,7 +363,20 @@ async function processChatRequest(userMessage) {
 
     // Hide loading and show response
     hideChatLoading();
-    addAssistantMessage(response, searchResults);
+
+    // Prepare search metadata if this was a search query
+    let searchMetadata = null;
+    if (extractedKeywords.is_search_query) {
+      searchMetadata = {
+        search_metadata: {
+          is_search_query: true,
+          keywords: extractedKeywords.keywords,
+          original_query: userMessage
+        }
+      };
+    }
+
+    addAssistantMessage(response, searchResults, searchMetadata);
 
   } catch (error) {
     // Re-throw error to be handled by the main generateResponse function
@@ -525,11 +538,11 @@ function getRecentMessagesForSession(maxMessages = 24) {
   // Add updated system prompt for intent-aware behavior
   messages.push({
     role: 'system',
-    content: `You are an AI assistant that helps users with both general conversation and finding information from their browsing history.
+    content: `You are an AI assistant that helps users with both casual conversation and finding information from their browsing history.
 
 Your responsibilities:
 
-**For general conversation:**
+**For casual conversation:**
 - Respond naturally and helpfully without mentioning browsing history
 - Be friendly and engaging
 - Don't try to search or reference browsing history
@@ -546,7 +559,6 @@ Your responsibilities:
 
 **Response guidelines:**
 - Format responses as plain text only. Do not include any links or HTML
-- Only reference information that has been provided to you
 - Match the user's tone (casual vs. informational)
 - Keep responses brief and concise
 - Be transparent about search result quality
@@ -727,7 +739,7 @@ function buildSearchContext(searchResults, quality = null) {
 
 
 
-function addAssistantMessage(content, searchResults = []) {
+function addAssistantMessage(content, searchResults = [], searchMetadata = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant-message';
 
@@ -767,8 +779,8 @@ function addAssistantMessage(content, searchResults = []) {
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
 
-  // Save to PGlite database
-  saveChatMessage('assistant', content);
+  // Save to PGlite database with search metadata if available
+  saveChatMessage('assistant', content, searchMetadata);
 }
 
 function addErrorMessage(message) {
@@ -1073,14 +1085,14 @@ async function loadChatHistory() {
     console.log('[CHAT] loadChatHistory: Loading', messages.length, 'messages from database');
 
     // Restore messages in UI
-    messages.forEach((message, index) => {
-      console.log('[CHAT] loadChatHistory: Adding message', index + 1, 'of', messages.length, '- Role:', message.role);
+    for (const [index, message] of messages.entries()) {
+      console.log('[CHAT] loadChatHistory: Adding message', index + 1, 'of', messages.length, '- Role:', message.role, 'metadata:', !!message.metadata);
       if (message.role === 'user') {
         addUserMessageFromHistory(message.content);
       } else if (message.role === 'assistant') {
-        addAssistantMessageFromHistory(message.content);
+        await addAssistantMessageFromHistory(message.content, message.metadata);
       }
-    });
+    }
 
     // Update storage preference
     await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
@@ -1095,15 +1107,15 @@ async function loadChatHistory() {
   }
 }
 
-async function saveChatMessage(role, content) {
+async function saveChatMessage(role, content, metadata = null) {
   try {
-    console.log('[CHAT] saveChatMessage: Called with role:', role, 'content length:', content.length);
+    console.log('[CHAT] saveChatMessage: Called with role:', role, 'content length:', content.length, 'metadata:', !!metadata);
 
     // Save message to PGlite database
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
       type: 'save-chat-message',
-      data: { threadId: CHAT_THREAD_ID, role, content }
+      data: { threadId: CHAT_THREAD_ID, role, content, metadata }
     });
 
     if (response.error) {
@@ -1116,6 +1128,7 @@ async function saveChatMessage(role, content) {
       id: response.messageId,
       role,
       content,
+      metadata,
       timestamp: Date.now()
     });
 
@@ -1140,17 +1153,62 @@ function addUserMessageFromHistory(content) {
   chatMessages.appendChild(messageDiv);
 }
 
-function addAssistantMessageFromHistory(content) {
+async function addAssistantMessageFromHistory(content, metadata = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant-message';
 
   // Process content to make links clickable
   const processedContent = processMessageContent(content);
 
+  let linksHtml = '';
+  let searchResults = [];
+
+  // If this message has search metadata, re-run the search to get fresh results
+  if (metadata?.search_metadata?.is_search_query) {
+    try {
+      console.log('[CHAT] Re-running search for historical message with keywords:', metadata.search_metadata.keywords);
+
+      // Re-create the extractedKeywords object to match the format expected by searchHistoryWithKeywords
+      const extractedKeywords = {
+        is_search_query: true,
+        keywords: metadata.search_metadata.keywords || []
+      };
+
+      searchResults = await searchHistoryWithKeywords(extractedKeywords, metadata.search_metadata.original_query);
+      console.log('[CHAT] Re-run search found', searchResults.length, 'results for historical message');
+
+      // Generate links HTML if we have results
+      if (searchResults.length > 0) {
+        linksHtml = `
+          <div class="message-links">
+            ${searchResults.slice(0, 5).map(result => `
+              <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
+                <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
+                <div class="message-link-content">
+                  <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
+                  ${result.summary || result.snippet ?
+            `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
+            ''
+          }
+                </div>
+              </a>
+            `).join('')}
+          </div>
+        `;
+      }
+    } catch (error) {
+      console.error('[CHAT] Failed to re-run search for historical message:', error);
+      // Continue with empty search results if re-run fails
+    }
+  }
+
   messageDiv.innerHTML = `
     <div class="message-avatar">🤖</div>
     <div class="message-content">
-      <div class="message-text">${processedContent}</div>
+      <div class="message-text">
+        ${processedContent}
+        ${linksHtml}
+      </div>
     </div>
   `;
 

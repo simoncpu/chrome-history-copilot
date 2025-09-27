@@ -221,8 +221,8 @@ async function handleMessage(message, sendResponse) {
 
       case 'save-chat-message':
         try {
-          const { threadId = 'default', role, content } = message.data;
-          const messageId = await db.saveChatMessage(threadId, role, content);
+          const { threadId = 'default', role, content, metadata } = message.data;
+          const messageId = await db.saveChatMessage(threadId, role, content, metadata);
 
           // Auto-prune to keep only last 200 messages
           await db.pruneChatMessages(threadId, 200);
@@ -540,9 +540,21 @@ class DatabaseWrapper {
         thread_id TEXT NOT NULL REFERENCES chat_thread(id),
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
         content TEXT NOT NULL,
+        metadata JSONB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Add metadata column if it doesn't exist (for existing databases)
+    try {
+      await this.db.exec(`ALTER TABLE chat_message ADD COLUMN metadata JSONB`);
+      console.log('[CHAT-DB] Added metadata column to existing chat_message table');
+    } catch (error) {
+      // Column already exists, which is fine
+      if (!error.message.includes('already exists')) {
+        console.log('[CHAT-DB] Note: metadata column addition skipped (likely already exists)');
+      }
+    }
 
     // Create chat message embedding table (optional for semantic recall)
     console.log('[CHAT-DB] Creating chat message embedding table...');
@@ -1030,7 +1042,7 @@ class DatabaseWrapper {
     }
   }
 
-  async saveChatMessage(threadId, role, content) {
+  async saveChatMessage(threadId, role, content, metadata = null) {
     try {
       await this.ensureChatThread(threadId);
 
@@ -1050,12 +1062,12 @@ class DatabaseWrapper {
       }
 
       const messageId = `${threadId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      logger.debug('[DB] Saving new chat message:', messageId, 'role:', role, 'content length:', content.length);
+      logger.debug('[DB] Saving new chat message:', messageId, 'role:', role, 'content length:', content.length, 'metadata:', !!metadata);
 
       await this.db.query(`
-        INSERT INTO chat_message (id, thread_id, role, content)
-        VALUES ($1, $2, $3, $4)
-      `, [messageId, threadId, role, content]);
+        INSERT INTO chat_message (id, thread_id, role, content, metadata)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [messageId, threadId, role, content, metadata ? JSON.stringify(metadata) : null]);
 
       return messageId;
     } catch (error) {
@@ -1067,15 +1079,34 @@ class DatabaseWrapper {
   async getChatMessages(threadId = 'default', limit = 200) {
     try {
       const result = await this.db.query(`
-        SELECT id, role, content, created_at
+        SELECT id, role, content, metadata, created_at
         FROM chat_message
         WHERE thread_id = $1
         ORDER BY created_at DESC
         LIMIT $2
       `, [threadId, limit]);
 
-      // Return in chronological order (oldest first)
-      return result.rows.reverse();
+      // Parse metadata and return in chronological order (oldest first)
+      const messages = result.rows.map(row => {
+        let parsedMetadata = null;
+        if (row.metadata) {
+          try {
+            // If it's already an object, use it as-is
+            // If it's a string, parse it
+            parsedMetadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+          } catch (error) {
+            console.warn('[DB] Failed to parse metadata for message:', row.id, error);
+            parsedMetadata = null;
+          }
+        }
+
+        return {
+          ...row,
+          metadata: parsedMetadata
+        };
+      });
+
+      return messages.reverse();
     } catch (error) {
       console.error('[DB] Failed to get chat messages:', error);
       return [];

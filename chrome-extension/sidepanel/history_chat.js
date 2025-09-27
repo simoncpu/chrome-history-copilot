@@ -897,8 +897,14 @@ function hideAIInitLoading() {
 function updateUI() {
   if (isGenerating) {
     sendButton.disabled = true;
+    if (clearChatButton) {
+      clearChatButton.disabled = true;
+    }
   } else {
     sendButton.disabled = false;
+    if (clearChatButton) {
+      clearChatButton.disabled = false;
+    }
   }
 }
 

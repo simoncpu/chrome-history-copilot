@@ -278,19 +278,38 @@ body::before {
   opacity: 0.65;
   cursor: not-allowed;
   pointer-events: none;
-  transition: opacity 0.3s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(203, 213, 225, 0.15) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.tab[data-generating="true"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(125, 211, 252, 0.2) 50%,
+    transparent 100%);
+  border-radius: inherit;
+  animation: shimmerTab 2s ease-in-out infinite;
+  z-index: 0;
 }
 
 /* Prevent hover effects when disabled */
 .tab[data-generating="true"]:hover {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(240, 249, 255, 0.6) 100%);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(203, 213, 225, 0.15) 100%);
   color: var(--text-secondary);
   transform: none;
   box-shadow: none;
 }
 
 .tab[data-generating="true"]:hover::before {
-  opacity: 0;
+  opacity: 1;
 }
 
 .tab[data-generating="true"]:hover .tab-icon {
@@ -462,36 +481,63 @@ body::before {
 
 /* Processing Status - Horizontal Loading Bar */
 .processing-status {
-  height: 3px;
+  height: 4px;
   width: 100%;
-  background: rgba(148, 163, 184, 0.1);
-  border-radius: 2px;
+  background: linear-gradient(135deg,
+    rgba(240, 249, 255, 0.8) 0%,
+    rgba(248, 250, 252, 0.6) 100%);
+  border-radius: 8px;
   overflow: hidden;
   margin: 8px 0;
   animation: fadeIn 0.3s ease-in-out;
+  box-shadow: inset 0 1px 2px rgba(125, 211, 252, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.08);
 }
 
 .loading-bar {
   height: 100%;
   background: linear-gradient(90deg,
     var(--primary-color) 0%,
-    rgba(125, 211, 252, 0.8) 50%,
+    var(--accent-color) 30%,
+    rgba(253, 215, 170, 0.8) 50%,
+    var(--accent-color) 70%,
     var(--primary-color) 100%);
-  width: 30%;
-  border-radius: 2px;
+  width: 40%;
+  border-radius: 8px;
   position: relative;
-  animation: indeterminateBar 1.5s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+  animation: organicFlow 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  box-shadow: 0 2px 12px rgba(125, 211, 252, 0.4);
 }
 
-@keyframes indeterminateBar {
+@keyframes organicFlow {
   0% {
-    transform: translateX(-100%);
+    transform: translateX(-120%) scaleX(0.8);
+    opacity: 0.7;
   }
-  60% {
-    transform: translateX(100%);
+  25% {
+    transform: translateX(-60%) scaleX(1.1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(0%) scaleX(1);
+    opacity: 1;
+  }
+  75% {
+    transform: translateX(60%) scaleX(1.1);
+    opacity: 1;
   }
   100% {
-    transform: translateX(333%);
+    transform: translateX(300%) scaleX(0.8);
+    opacity: 0.7;
+  }
+}
+
+@keyframes shimmerTab {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
   }
 }
 
@@ -530,12 +576,15 @@ body::before {
   height: 100%;
   background: linear-gradient(90deg,
     var(--primary-color) 0%,
-    rgba(125, 211, 252, 0.8) 50%,
+    var(--accent-color) 30%,
+    rgba(253, 215, 170, 0.8) 50%,
+    var(--accent-color) 70%,
     var(--primary-color) 100%);
-  width: 30%;
-  border-radius: 2px;
+  width: 40%;
+  border-radius: 8px;
   position: relative;
-  animation: indeterminateBar 1.5s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+  animation: organicFlow 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  box-shadow: 0 2px 12px rgba(125, 211, 252, 0.4);
 }
 
 .ai-init-text {
@@ -1550,17 +1599,24 @@ body::before {
   display: flex;
   gap: 4px;
   padding: 12px 16px;
-  background: white;
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow);
+  background: linear-gradient(135deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(240, 249, 255, 0.9) 100%);
+  border-radius: 16px 8px 16px 8px;
+  box-shadow:
+    0 4px 20px rgba(125, 211, 252, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(125, 211, 252, 0.1);
+  backdrop-filter: blur(10px);
 }
 
 .typing-indicator span {
   width: 8px;
   height: 8px;
-  background: var(--text-muted);
+  background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
   border-radius: 50%;
   animation: typing-bounce 1.4s ease-in-out infinite both;
+  box-shadow: 0 2px 8px rgba(125, 211, 252, 0.3);
 }
 
 .typing-indicator span:nth-child(1) {
@@ -1572,17 +1628,17 @@ body::before {
 }
 
 @keyframes typing-bounce {
-
   0%,
   80%,
   100% {
-    transform: scale(0.8);
-    opacity: 0.5;
+    transform: scale(0.6) translateY(0);
+    opacity: 0.4;
   }
 
   40% {
-    transform: scale(1);
+    transform: scale(1.1) translateY(-4px);
     opacity: 1;
+    box-shadow: 0 4px 12px rgba(125, 211, 252, 0.4);
   }
 }
 
@@ -1719,11 +1775,21 @@ body::before {
   opacity: 0.6;
 }
 
-.chat-clear-button:hover {
+.chat-clear-button:hover:not(:disabled) {
   background: rgba(248, 113, 113, 0.1);
   color: #ef4444;
   opacity: 1;
   transform: scale(1.05);
+}
+
+.chat-clear-button:disabled {
+  background: linear-gradient(135deg,
+    rgba(148, 163, 184, 0.08) 0%,
+    rgba(203, 213, 225, 0.12) 100%);
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .clear-icon {

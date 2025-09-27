@@ -12,7 +12,6 @@ let chatForm;
 let sendButton;
 let chatLoading;
 let chatStatus;
-let statusText;
 let clearChatButton;
 let advancedToggleChat;
 let advancedPanelChat;
@@ -54,7 +53,6 @@ function initializeChatPage() {
   sendButton = document.getElementById('sendButton');
   chatLoading = document.getElementById('chatLoading');
   chatStatus = document.getElementById('chatStatus');
-  statusText = document.getElementById('statusText');
   clearChatButton = document.getElementById('clearChat');
   advancedToggleChat = document.getElementById('advancedToggleChat');
   advancedPanelChat = document.getElementById('advancedPanelChat');
@@ -74,6 +72,9 @@ function initializeChatPage() {
 
   // Set up tab navigation
   setupTabNavigation();
+
+  // Set up scroll position persistence
+  setupScrollPersistence();
 
   // Initialize AI session
   initializeAI();
@@ -213,6 +214,33 @@ function setupTabNavigation() {
       }
     });
   });
+}
+
+function setupScrollPersistence() {
+  // Scroll position saving (debounced) - matching working pattern from search page
+  const chatContainer = document.querySelector('.chat-container');
+  let scrollTimeout;
+  if (chatContainer) {
+    chatContainer.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(async () => {
+        // Check for actual messages in DOM (excluding welcome message) like the original working logic
+        const messageCount = chatMessages ? chatMessages.querySelectorAll('.message:not(#welcomeMessage)').length : 0;
+        const currentScrollTop = chatContainer.scrollTop;
+
+        if (messageCount > 0 && currentScrollTop > 0) {
+          try {
+            await chrome.storage.local.set({ lastChatScrollPosition: currentScrollTop });
+          } catch (error) {
+            console.error('[CHAT] Failed to save scroll position:', error);
+          }
+        }
+      }, 500); // Use same debounce delay as search page
+    });
+
+  } else {
+    console.error('[CHAT] .chat-container element not found for scroll persistence');
+  }
 }
 
 // Auto-resize textarea
@@ -436,29 +464,6 @@ async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
   }
 }
 
-// Legacy search function for compatibility
-async function searchHistory(query) {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
-      type: 'search',
-      data: {
-        query: query,
-        mode: 'hybrid-rerank',
-        limit: 10
-      }
-    });
-
-    if (response.error) {
-      throw new Error(response.error);
-    }
-
-    return response.results || [];
-  } catch (error) {
-    console.error('[CHAT] History search failed:', error);
-    return [];
-  }
-}
 
 
 async function generateAIResponse(userMessage, isSearchQuery, searchResults, searchQuality, onProgress = null) {
@@ -877,22 +882,35 @@ function hideAIInitLoading() {
 function updateUI() {
   if (isGenerating) {
     sendButton.disabled = true;
-    statusText.textContent = 'Generating response...';
   } else {
     sendButton.disabled = false;
-    statusText.textContent = 'Ready to chat';
   }
 }
 
-function scrollToBottom(retries = 2) {
-  if (!chatMessages) return;
+function isNearBottom() {
+  const chatContainer = document.querySelector('.chat-container');
+  if (!chatContainer) return true;
+  const threshold = 100; // pixels from bottom
+  return (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) <= threshold;
+}
+
+function scrollToBottom(retries = 2, force = false) {
+  const chatContainer = document.querySelector('.chat-container');
+  if (!chatContainer) return;
+
+  // Only auto-scroll if user is near bottom or if forced
+  if (!force && !isNearBottom()) {
+    return;
+  }
+
   requestAnimationFrame(() => {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatContainer.scrollTop = chatContainer.scrollHeight;
     if (retries > 0) {
-      setTimeout(() => scrollToBottom(retries - 1), 50);
+      setTimeout(() => scrollToBottom(retries - 1, force), 50);
     }
   });
 }
+
 
 // AI initialization
 async function initializeAI() {
@@ -904,11 +922,9 @@ async function initializeAI() {
 
     // Check availability - Chrome AI is expected to be available
     if (caps?.languageModel?.ready || caps?.languageModel?.available === 'readily' || caps?.languageModel?.available === 'available') {
-      statusText.textContent = 'AI ready';
       console.log('[CHAT] Chrome AI initialized successfully');
       hideAIInitLoading();
     } else if (caps?.languageModel?.available === 'downloadable') {
-      statusText.textContent = 'AI ready (downloading model...)';
       console.log('[CHAT] Chrome AI model downloadable, ready to use');
       showAIInitLoading('Downloading AI model...');
 
@@ -917,20 +933,17 @@ async function initializeAI() {
         hideAIInitLoading();
       }, 2000);
     } else if (caps?.languageModel?.available === 'downloading') {
-      statusText.textContent = 'AI downloading model...';
       console.log('[CHAT] Chrome AI model downloading');
       showAIInitLoading('Downloading AI model...');
 
       // Poll for completion
       pollForAIReadiness();
     } else {
-      statusText.textContent = `AI status: ${caps?.languageModel?.available || 'unavailable'}`;
       console.log('[CHAT] Chrome AI status:', caps?.languageModel?.available);
       hideAIInitLoading();
     }
   } catch (error) {
     console.error('[CHAT] AI initialization failed:', error);
-    statusText.textContent = 'AI initialization failed - check Chrome AI configuration';
     hideAIInitLoading();
     throw error; // Fail initialization if Chrome AI is not available
   }
@@ -948,7 +961,6 @@ async function pollForAIReadiness() {
 
       if (caps?.languageModel?.ready || caps?.languageModel?.available === 'available' || caps?.languageModel?.available === 'readily') {
         // AI is ready
-        statusText.textContent = 'AI ready';
         console.log('[CHAT] Chrome AI download completed');
         hideAIInitLoading();
         return;
@@ -960,7 +972,6 @@ async function pollForAIReadiness() {
       } else {
         // Either completed with different status or timeout
         console.log('[CHAT] AI polling stopped:', caps?.languageModel?.available);
-        statusText.textContent = `AI status: ${caps?.languageModel?.available || 'unavailable'}`;
         hideAIInitLoading();
       }
     } catch (error) {
@@ -1090,20 +1101,41 @@ async function loadChatHistory() {
     console.log('[CHAT] loadChatHistory: Loading', messages.length, 'messages from database');
 
     // Restore messages in UI
+    let messagesWithSearchRerun = 0;
     for (const [index, message] of messages.entries()) {
       console.log('[CHAT] loadChatHistory: Adding message', index + 1, 'of', messages.length, '- Role:', message.role, 'metadata:', !!message.metadata);
       if (message.role === 'user') {
         addUserMessageFromHistory(message.content);
       } else if (message.role === 'assistant') {
+        // Check if this message will trigger a search rerun
+        if (message.metadata?.search_metadata?.is_search_query) {
+          messagesWithSearchRerun++;
+        }
         await addAssistantMessageFromHistory(message.content, message.metadata);
       }
     }
 
+    console.log('[CHAT] Messages with search rerun:', messagesWithSearchRerun);
+
     // Update storage preference
     await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
 
-    // Ensure we start scrolled to bottom when opening chat
-    scrollToBottom();
+    // Restore scroll position after all messages are processed - matching search page pattern
+    // Use different timing based on whether there were search reruns (like auto-load vs new search in search page)
+    const scrollDelay = messagesWithSearchRerun > 0 ? 1500 : 300;
+
+    setTimeout(async () => {
+      try {
+        const stored = await chrome.storage.local.get(['lastChatScrollPosition']);
+        const chatContainer = document.querySelector('.chat-container');
+
+        if (chatContainer && stored.lastChatScrollPosition && stored.lastChatScrollPosition > 0) {
+          chatContainer.scrollTop = stored.lastChatScrollPosition;
+        }
+      } catch (error) {
+        console.error('[CHAT] Failed to restore scroll position:', error);
+      }
+    }, scrollDelay);
   } catch (error) {
     console.error('[CHAT] Failed to load chat history:', error);
   } finally {
@@ -1245,6 +1277,13 @@ async function handleClearChat() {
       }
     });
 
+    // Clear stored scroll position (matching search page pattern)
+    try {
+      await chrome.storage.local.set({ lastChatScrollPosition: 0 });
+    } catch (error) {
+      console.error('[CHAT] Failed to clear scroll position:', error);
+    }
+
     // Reset AI session to start fresh
     if (aiSession) {
       try {
@@ -1258,7 +1297,7 @@ async function handleClearChat() {
     // Reset UI state
     isGenerating = false;
     updateUI();
-    scrollToBottom();
+    scrollToBottom(2, true);
   } catch (e) {
     console.error('[CHAT] Failed to clear chat:', e);
   }
@@ -1360,9 +1399,6 @@ function disableChatInput() {
   if (sendButton && !isGenerating) {
     sendButton.disabled = true;
   }
-  if (statusText) {
-    statusText.textContent = 'Processing pages...';
-  }
 }
 
 function enableChatInput() {
@@ -1372,9 +1408,6 @@ function enableChatInput() {
   }
   if (sendButton && !isGenerating) {
     sendButton.disabled = false;
-  }
-  if (statusText && !isGenerating) {
-    statusText.textContent = 'Ready to chat';
   }
 }
 

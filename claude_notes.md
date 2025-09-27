@@ -262,3 +262,47 @@ This file documents changes, fixes, and development notes for the AI History Chr
 - Proper routing through `ensureOffscreenDocument()` flow
 - Consistent with other offscreen document operations
 - Eliminates need to visit a website first to initialize the system
+
+### 2025-01-28: Chat Interface Design Improvements
+
+**Changes Made**: Enhanced chat interface to match search interface design and improve user experience.
+
+**Files Modified**:
+- `chrome-extension/sidepanel/history_chat.html`
+- `chrome-extension/sidepanel/history_chat.js`
+- `chrome-extension/sidepanel/styles.css`
+
+#### 1. Chat Input Section Redesign
+- Applied organic flow styling from search interface
+- Added radial gradient backgrounds with ocean/orange color palette
+- Implemented decorative gradient border at top of section
+- Enhanced focus animations with color transitions and elevation
+- Updated to use asymmetrical organic border radius
+- Added backdrop blur effects for modern depth
+
+#### 2. Clear Chat Button Relocation
+- Moved from separate status container into input container as icon button
+- Converted from text "Clear Chat" to trash can icon
+- Positioned inline with send button in new `.chat-actions` container
+- Added hover effects with red accent color for destructive action indication
+- Eliminated separate `.chat-status` container entirely
+- Saved significant vertical space while improving accessibility
+
+#### 3. Scroll Position Persistence Fix (FIXED)
+**Root Cause Identified**: Scroll event listener was attached to wrong element (`#chatMessages` instead of `.chat-container`)
+
+**Solution Applied**:
+- Fixed scroll listener to attach to `.chat-container` (the actual scrollable element with `overflow-y: auto`)
+- Updated all scroll operations (`scrollToBottom`, `isNearBottom`, restore) to use `.chat-container`
+- Applied same working pattern as search page (`.content-scroll-wrapper`)
+- Simplified logging and removed test code
+
+**Files Modified**:
+- `chrome-extension/sidepanel/history_chat.js` (scroll persistence functions)
+
+**Status**: FIXED - scroll position persistence now working correctly
+
+**Code Cleanup Performed**:
+- Removed unused `searchHistory` function (legacy compatibility code)
+- Removed test scroll-to-middle logic
+- Simplified debug logging while keeping essential error logs

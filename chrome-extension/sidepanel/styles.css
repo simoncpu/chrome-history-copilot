@@ -1476,7 +1476,7 @@ input[type="checkbox"]:disabled + label {
 .chat-messages {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   flex: 1;
 }
 
@@ -1484,7 +1484,11 @@ input[type="checkbox"]:disabled + label {
   display: flex;
   gap: 10px;
   max-width: 100%;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
+}
+
+.message:last-child {
+  margin-bottom: 0;
 }
 
 .user-message {
@@ -1628,7 +1632,7 @@ input[type="checkbox"]:disabled + label {
 
 /* Chat Loading */
 .chat-loading {
-  padding: 0 16px 16px;
+  padding: 6px 16px 0;
 }
 
 .typing-indicator {
@@ -1833,6 +1837,39 @@ input[type="checkbox"]:disabled + label {
   width: 16px;
   height: 16px;
   stroke-width: 2;
+}
+
+.search-clear-button {
+  padding: 8px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-smooth);
+  opacity: 0.6;
+  position: relative;
+  z-index: 1;
+}
+
+.search-clear-button:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.1);
+  color: #ef4444;
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.search-clear-button:disabled {
+  background: linear-gradient(135deg,
+    rgba(148, 163, 184, 0.08) 0%,
+    rgba(203, 213, 225, 0.12) 100%);
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .send-button {

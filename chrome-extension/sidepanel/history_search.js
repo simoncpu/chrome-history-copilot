@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js';
 // DOM elements
 let searchInput;
 let searchButton;
+let clearSearchButton;
 let advancedToggle;
 let advancedPanel;
 let searchMode;
@@ -46,6 +47,7 @@ function initializeSearchPage() {
   // Get DOM elements
   searchInput = document.getElementById('searchInput');
   searchButton = document.getElementById('searchButton');
+  clearSearchButton = document.getElementById('clearSearch');
   advancedToggle = document.getElementById('advancedToggle');
   advancedPanel = document.getElementById('advancedPanel');
   // searchMode now handled via radio buttons
@@ -168,6 +170,9 @@ function setupEventListeners() {
 
   // Search button
   searchButton.addEventListener('click', handleSearchSubmit);
+
+  // Clear search button
+  clearSearchButton.addEventListener('click', handleClearSearch);
 
   // Advanced options toggle
   advancedToggle.addEventListener('click', toggleSettingsDropdown);
@@ -292,6 +297,12 @@ function handleSearchKeydown(e) {
     e.preventDefault();
     handleSearchSubmit();
   }
+}
+
+function handleClearSearch() {
+  // Clear the input and trigger input event to simulate user typing
+  searchInput.value = '';
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function handleSearchSubmit() {

@@ -846,7 +846,9 @@ function hideChatLoading() {
 }
 
 function updateChatProgress(message) {
+  // TEMPORARILY COMMENTED OUT - to see how it looks without progress text
   // Find or create progress text element
+  /*
   let progressText = document.getElementById('chatProgressText');
   if (!progressText) {
     progressText = document.createElement('div');
@@ -862,6 +864,7 @@ function updateChatProgress(message) {
   }
 
   progressText.textContent = message;
+  */
   scrollToBottom();
 }
 

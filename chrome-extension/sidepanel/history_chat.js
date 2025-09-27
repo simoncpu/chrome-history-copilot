@@ -193,7 +193,8 @@ function setupEventListeners() {
         if (e.target.checked) {
           await chrome.runtime.sendMessage({ type: 'start-remote-warm' });
         }
-        await updateModelStatusChat();
+        // Skip checkbox sync to preserve user's choice
+        await updateModelStatusChat(true);
         if (e.target.checked) startModelWarmWatcherChat();
       } catch (err) {
         console.warn('[CHAT] Failed to update remote warm pref:', err);
@@ -1012,10 +1013,8 @@ async function pollForAIReadiness() {
 async function loadChatPrefs() {
   try {
     const result = await chrome.storage.local.get(['aiPrefs']);
-    if (toggleRemoteWarmChat) {
-      const pref = !!(result.aiPrefs && result.aiPrefs.enableRemoteWarm);
-      toggleRemoteWarmChat.checked = pref;
-    }
+
+    // Checkbox state is now handled by updateModelStatusChat()
 
     // Load input disabling preference (default: false - don't disable)
     shouldDisableInputDuringProcessing = !!(result.aiPrefs?.disableInputDuringProcessing);
@@ -1030,24 +1029,65 @@ async function saveAiPrefs(partial) {
   await chrome.storage.local.set({ aiPrefs: next });
 }
 
-async function updateModelStatusChat() {
+async function updateModelStatusChat(skipCheckboxSync = false) {
   if (!modelStatusChat) return;
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'get-model-status' });
     const ms = resp && resp.modelStatus ? resp.modelStatus : null;
-    if (!ms) { modelStatusChat.textContent = 'Model status: unavailable'; return; }
+
+    // Get user's intended preference
+    const prefs = await chrome.storage.local.get(['aiPrefs']);
+    const userWantsRemote = !!(prefs.aiPrefs?.enableRemoteWarm);
+
+    if (!ms) {
+      modelStatusChat.textContent = 'Model status: unavailable';
+      // Sync checkbox with stored preference (user intent) unless skipping
+      if (toggleRemoteWarmChat && !skipCheckboxSync) {
+        toggleRemoteWarmChat.checked = userWantsRemote;
+        toggleRemoteWarmChat.disabled = false;
+      }
+      return;
+    }
+
+    // Status text shows actual state + transition info
     if (ms.warming) {
       modelStatusChat.innerHTML = '<span class="inline-spinner"></span>Model: warming larger remote model… (using local)';
     } else if (ms.using === 'remote') {
-      modelStatusChat.textContent = 'Model: Remote (large)';
+      if (!userWantsRemote) {
+        // Remote → Local transition
+        modelStatusChat.textContent = 'Model: Remote (will switch to local on next use)';
+      } else {
+        modelStatusChat.textContent = 'Model: Remote (large)';
+      }
     } else {
-      modelStatusChat.textContent = 'Model: Local (quantized)';
+      if (userWantsRemote && !ms.warming) {
+        // Local → Remote transition (not warming yet)
+        modelStatusChat.textContent = 'Model: Local (remote model requested)';
+      } else {
+        modelStatusChat.textContent = 'Model: Local (quantized)';
+      }
     }
+
     if (ms.lastError) {
       modelStatusChat.textContent += ` — warm-up failed: ${ms.lastError}`;
     }
+
+    // Sync checkbox with stored preference (user intent) unless skipping
+    if (toggleRemoteWarmChat && !skipCheckboxSync) {
+      toggleRemoteWarmChat.checked = userWantsRemote;
+      // Disable during warming
+      toggleRemoteWarmChat.disabled = ms.warming;
+    } else if (toggleRemoteWarmChat) {
+      // Still disable during warming even when skipping sync
+      toggleRemoteWarmChat.disabled = ms.warming;
+    }
   } catch (e) {
     modelStatusChat.textContent = 'Model status: error retrieving';
+    // Reset checkbox state on error (unless skipping sync)
+    if (toggleRemoteWarmChat && !skipCheckboxSync) {
+      toggleRemoteWarmChat.checked = false;
+      toggleRemoteWarmChat.disabled = false;
+    }
   }
 }
 

@@ -133,7 +133,8 @@ Your responsibilities:
 3. If no relevant information is found, say so clearly
 
 Format guidelines:
-- Use **bold** for emphasis
+- Use **double asterisks** around titles and important terms for emphasis
+- Do not include any links or HTML in responses
 - Be direct and actionable
 
 Remember: You can only reference information from the provided browsing history context.`;
@@ -242,7 +243,7 @@ Remember: You can only reference information from the provided browsing history 
 
     const sessionOptions = {
       type: options.type || 'tldr', // Fixed typo: 'tl;dr' -> 'tldr'
-      format: options.format || 'markdown',
+      format: options.format || 'plain-text',
       length: options.length || 'short'
     };
 

@@ -548,6 +548,7 @@ Your responsibilities:
 - Don't try to search or reference browsing history
 
 **For search queries (when browsing history context is provided):**
+- NEVER echo or repeat the raw context data - only reference the information within it
 - If SEARCH_STATUS indicates "No relevant results found": Tell the user you couldn't find anything in their browsing history about that topic
 - If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results
 - For high-confidence results: Present them confidently. Only the first result is high-confidence though. Treat the rest as medium or low confidence.
@@ -558,7 +559,8 @@ Your responsibilities:
 - Use recency information to provide context ("This recent article you visited..." vs "This page you looked at last month...")
 
 **Response guidelines:**
-- Format responses as plain text only. Do not include any links or HTML
+- Use **double asterisks** around titles and important terms for emphasis
+- Do not include any links or HTML in responses
 - Match the user's tone (casual vs. informational)
 - Keep responses brief and concise
 - Be transparent about search result quality
@@ -799,6 +801,9 @@ function addErrorMessage(message) {
 }
 
 function processMessageContent(content) {
+  // Trim leading and trailing whitespace (including newlines)
+  content = content.trim();
+
   // Convert line breaks to HTML
   content = content.replace(/\n/g, '<br>');
 

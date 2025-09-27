@@ -228,7 +228,7 @@ function setupScrollPersistence() {
         const messageCount = chatMessages ? chatMessages.querySelectorAll('.message:not(#welcomeMessage)').length : 0;
         const currentScrollTop = chatContainer.scrollTop;
 
-        if (messageCount > 0 && currentScrollTop > 0) {
+        if (messageCount > 0 && currentScrollTop >= 0) {
           try {
             await chrome.storage.local.set({ lastChatScrollPosition: currentScrollTop });
           } catch (error) {
@@ -291,7 +291,7 @@ function addUserMessage(message) {
   `;
 
   chatMessages.appendChild(messageDiv);
-  scrollToBottom();
+  scrollToBottom(2, true);  // Force scroll to show user's message
 
   // Save to PGlite database
   saveChatMessage('user', message);
@@ -332,6 +332,7 @@ async function generateResponse(userMessage) {
   }).finally(() => {
     isGenerating = false;
     updateUI();
+    scrollToBottom(2, true);  // Final scroll to ensure response is visible
   });
 }
 
@@ -405,6 +406,7 @@ async function processChatRequest(userMessage) {
     }
 
     addAssistantMessage(response, searchResults, searchMetadata);
+    scrollToBottom(2, true);  // Force scroll to show AI response
 
   } catch (error) {
     // Re-throw error to be handled by the main generateResponse function
@@ -1100,42 +1102,49 @@ async function loadChatHistory() {
     chatHistory = messages;
     console.log('[CHAT] loadChatHistory: Loading', messages.length, 'messages from database');
 
-    // Restore messages in UI
-    let messagesWithSearchRerun = 0;
+    // Restore messages in UI and track search promises
+    const searchPromises = [];
     for (const [index, message] of messages.entries()) {
       console.log('[CHAT] loadChatHistory: Adding message', index + 1, 'of', messages.length, '- Role:', message.role, 'metadata:', !!message.metadata);
       if (message.role === 'user') {
         addUserMessageFromHistory(message.content);
       } else if (message.role === 'assistant') {
-        // Check if this message will trigger a search rerun
-        if (message.metadata?.search_metadata?.is_search_query) {
-          messagesWithSearchRerun++;
+        const searchPromise = await addAssistantMessageFromHistory(message.content, message.metadata);
+        if (searchPromise) {
+          searchPromises.push(searchPromise);
         }
-        await addAssistantMessageFromHistory(message.content, message.metadata);
       }
     }
 
-    console.log('[CHAT] Messages with search rerun:', messagesWithSearchRerun);
+    console.log('[CHAT] Messages with search promises:', searchPromises.length);
 
     // Update storage preference
     await chrome.storage.local.set({ lastSidePanelPage: 'chat' });
 
-    // Restore scroll position after all messages are processed - matching search page pattern
-    // Use different timing based on whether there were search reruns (like auto-load vs new search in search page)
-    const scrollDelay = messagesWithSearchRerun > 0 ? 1500 : 300;
-
-    setTimeout(async () => {
+    // Wait for all search results to complete before restoring scroll position
+    if (searchPromises.length > 0) {
+      console.log('[CHAT] Waiting for', searchPromises.length, 'search operations to complete...');
       try {
-        const stored = await chrome.storage.local.get(['lastChatScrollPosition']);
-        const chatContainer = document.querySelector('.chat-container');
-
-        if (chatContainer && stored.lastChatScrollPosition && stored.lastChatScrollPosition > 0) {
-          chatContainer.scrollTop = stored.lastChatScrollPosition;
-        }
+        await Promise.all(searchPromises);
+        console.log('[CHAT] All search operations completed');
       } catch (error) {
-        console.error('[CHAT] Failed to restore scroll position:', error);
+        console.error('[CHAT] Some search operations failed:', error);
+        // Continue with scroll restoration even if some searches failed
       }
-    }, scrollDelay);
+    }
+
+    // Restore scroll position immediately after content is ready
+    try {
+      const stored = await chrome.storage.local.get(['lastChatScrollPosition']);
+      const chatContainer = document.querySelector('.chat-container');
+
+      if (chatContainer && stored.lastChatScrollPosition && stored.lastChatScrollPosition > 0) {
+        chatContainer.scrollTop = stored.lastChatScrollPosition;
+        console.log('[CHAT] Scroll position restored immediately after search completion');
+      }
+    } catch (error) {
+      console.error('[CHAT] Failed to restore scroll position:', error);
+    }
   } catch (error) {
     console.error('[CHAT] Failed to load chat history:', error);
   } finally {
@@ -1198,45 +1207,54 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
   const processedContent = processMessageContent(content);
 
   let linksHtml = '';
-  let searchResults = [];
+  let searchPromise = null;
 
   // If this message has search metadata, re-run the search to get fresh results
   if (metadata?.search_metadata?.is_search_query) {
-    try {
-      console.log('[CHAT] Re-running search for historical message with keywords:', metadata.search_metadata.keywords);
+    console.log('[CHAT] Re-running search for historical message with keywords:', metadata.search_metadata.keywords);
 
-      // Re-create the extractedKeywords object to match the format expected by searchHistoryWithKeywords
-      const extractedKeywords = {
-        is_search_query: true,
-        keywords: metadata.search_metadata.keywords || []
-      };
+    // Re-create the extractedKeywords object to match the format expected by searchHistoryWithKeywords
+    const extractedKeywords = {
+      is_search_query: true,
+      keywords: metadata.search_metadata.keywords || []
+    };
 
-      searchResults = await searchHistoryWithKeywords(extractedKeywords, metadata.search_metadata.original_query);
-      console.log('[CHAT] Re-run search found', searchResults.length, 'results for historical message');
+    // Return the search promise so the caller can track completion
+    searchPromise = searchHistoryWithKeywords(extractedKeywords, metadata.search_metadata.original_query)
+      .then(searchResults => {
+        console.log('[CHAT] Re-run search found', searchResults.length, 'results for historical message');
 
-      // Generate links HTML if we have results
-      if (searchResults.length > 0) {
-        linksHtml = `
-          <div class="message-links">
-            ${searchResults.slice(0, 5).map(result => `
-              <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
-                <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
-                <div class="message-link-content">
-                  <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
-                  ${result.summary || result.snippet ?
-            `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
-            ''
+        // Generate links HTML if we have results
+        if (searchResults.length > 0) {
+          const linksHtml = `
+            <div class="message-links">
+              ${searchResults.slice(0, 5).map(result => `
+                <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
+                  <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
+                  <div class="message-link-content">
+                    <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
+                    ${result.summary || result.snippet ?
+              `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
+              ''
+            }
+                  </div>
+                </a>
+              `).join('')}
+            </div>
+          `;
+
+          // Update the message with search results
+          const messageTextDiv = messageDiv.querySelector('.message-text');
+          if (messageTextDiv) {
+            messageTextDiv.innerHTML = processedContent + linksHtml;
           }
-                </div>
-              </a>
-            `).join('')}
-          </div>
-        `;
-      }
-    } catch (error) {
-      console.error('[CHAT] Failed to re-run search for historical message:', error);
-      // Continue with empty search results if re-run fails
-    }
+        }
+        return searchResults;
+      })
+      .catch(error => {
+        console.error('[CHAT] Failed to re-run search for historical message:', error);
+        return [];
+      });
   }
 
   messageDiv.innerHTML = `
@@ -1251,6 +1269,9 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
 
   // Append after the welcome message (messages load in chronological order)
   chatMessages.appendChild(messageDiv);
+
+  // Return the search promise so the caller can track completion
+  return searchPromise;
 }
 
 async function handleClearChat() {

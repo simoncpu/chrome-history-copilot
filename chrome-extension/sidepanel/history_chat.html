@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI History Chat</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <div class="container">
     <!-- Permissions Overlay (hidden by default) -->
@@ -69,7 +71,9 @@
         <div id="chatMessages" class="chat-messages">
           <!-- Welcome Message -->
           <div class="message assistant-message" id="welcomeMessage">
-            <div class="message-avatar">🤖</div>
+            <div class="message-avatar">
+              <img src="../icons/chrome-chan-avatar-128.png" alt="AI Assistant" class="avatar-image">
+            </div>
             <div class="message-content">
               <div class="message-text">
                 <p>Hi! I can help you find information from your browsing history. Ask me anything!</p>
@@ -87,7 +91,9 @@
         <!-- Loading Indicator -->
         <div id="chatLoading" class="chat-loading hidden">
           <div class="message assistant-message">
-            <div class="message-avatar">🤖</div>
+            <div class="message-avatar">
+              <img src="../icons/chrome-chan-avatar-128.png" alt="AI Assistant" class="avatar-image">
+            </div>
             <div class="message-content">
               <div class="typing-indicator">
                 <span></span>
@@ -121,13 +127,8 @@
 
         <form id="chatForm" class="chat-form">
           <div class="chat-input-container">
-            <textarea
-              id="chatInput"
-              class="chat-input"
-              placeholder="Ask about your browsing history..."
-              rows="1"
-              autocomplete="off"
-            ></textarea>
+            <textarea id="chatInput" class="chat-input" placeholder="How can I help you?" rows="1"
+              autocomplete="off"></textarea>
             <div class="chat-actions">
               <button type="button" id="clearChat" class="chat-clear-button" title="Clear chat history">
                 <svg class="clear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -152,4 +153,5 @@
 
   <script type="module" src="history_chat.js"></script>
 </body>
+
 </html>

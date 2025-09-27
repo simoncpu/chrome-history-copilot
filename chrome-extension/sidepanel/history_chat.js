@@ -284,7 +284,6 @@ function addUserMessage(message) {
   messageDiv.className = 'message user-message';
 
   messageDiv.innerHTML = `
-    <div class="message-avatar">👤</div>
     <div class="message-content">
       <div class="message-text">${escapeHtml(message)}</div>
     </div>
@@ -789,7 +788,9 @@ function addAssistantMessage(content, searchResults = [], searchMetadata = null)
   }
 
   messageDiv.innerHTML = `
-    <div class="message-avatar">🤖</div>
+    <div class="message-avatar">
+      <img src="../icons/chrome-chan-avatar-128.png" alt="AI Assistant" class="avatar-image">
+    </div>
     <div class="message-content">
       <div class="message-text">
         ${processedContent}
@@ -887,7 +888,7 @@ function hideAIInitLoading() {
   // Re-enable chat input
   if (chatInput) {
     chatInput.disabled = false;
-    chatInput.placeholder = 'Ask about your browsing history...';
+    chatInput.placeholder = 'How can I help you today?';
   }
   if (sendButton && !isGenerating) {
     sendButton.disabled = false;
@@ -1208,7 +1209,6 @@ function addUserMessageFromHistory(content) {
   messageDiv.className = 'message user-message';
 
   messageDiv.innerHTML = `
-    <div class="message-avatar">👤</div>
     <div class="message-content">
       <div class="message-text">${escapeHtml(content)}</div>
     </div>
@@ -1277,7 +1277,9 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
   }
 
   messageDiv.innerHTML = `
-    <div class="message-avatar">🤖</div>
+    <div class="message-avatar">
+      <img src="../icons/chrome-chan-avatar-128.png" alt="AI Assistant" class="avatar-image">
+    </div>
     <div class="message-content">
       <div class="message-text">
         ${processedContent}
@@ -1444,7 +1446,7 @@ function disableChatInput() {
 function enableChatInput() {
   if (chatInput && !isGenerating) {
     chatInput.disabled = false;
-    chatInput.placeholder = 'Ask about your browsing history...';
+    chatInput.placeholder = 'How can I help you today?';
   }
   if (sendButton && !isGenerating) {
     sendButton.disabled = false;

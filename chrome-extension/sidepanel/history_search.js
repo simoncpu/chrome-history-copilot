@@ -1,6 +1,7 @@
 /**
  * AI History Search - Search Page Controller
  */
+import { logger } from '../utils/logger.js';
 
 
 
@@ -386,7 +387,7 @@ async function performSearch(query, offset = 0, isAutoLoad = false) {
     // If system is initializing, the loading state (shimmer) will continue
     // until the search completes or fails
     if (pingResponse && pingResponse.initializing) {
-      console.log('[SEARCH] System still initializing, search will wait...');
+      logger.debug('[SEARCH] System still initializing, search will wait...');
     }
 
     // Send search request to offscreen document
@@ -406,7 +407,7 @@ async function performSearch(query, offset = 0, isAutoLoad = false) {
     }
 
     const results = response.results || [];
-    console.log('[SEARCH] Got results from offscreen:', results.length, 'first few:', results.slice(0, 3));
+    logger.debug('[SEARCH] Got results from offscreen:', results.length, 'first few:', results.slice(0, 3));
 
     if (offset === 0) {
       currentResults = results;
@@ -970,7 +971,7 @@ async function checkQueueStatus() {
 
       // If processing just finished, refresh the search to show updated summaries
       if (wasProcessing && !isProcessingPages && currentQuery) {
-        console.log('[SEARCH] Processing finished, refreshing search results');
+        logger.debug('[SEARCH] Processing finished, refreshing search results');
         // Small delay to ensure database is updated
         setTimeout(() => {
           performSearch(currentQuery, 0, true);
@@ -1040,11 +1041,11 @@ function setupStatusUpdateListener() {
 
 // Handle new content being indexed
 function handleContentIndexed(data) {
-  console.log('[SEARCH] New content indexed:', data.url);
+  logger.debug('[SEARCH] New content indexed:', data.url);
 
   // Hide progress indicator when indexing is complete
   if (data.indexingComplete && isProcessingPages) {
-    console.log('[SEARCH] Indexing complete, hiding progress indicator');
+    logger.debug('[SEARCH] Indexing complete, hiding progress indicator');
     isProcessingPages = false;
     hideProcessingStatus();
     if (shouldDisableInputDuringProcessing) {
@@ -1066,11 +1067,11 @@ function handleContentIndexed(data) {
       // Auto-refresh current results
       if (currentQuery) {
         // Re-run current search to include new content
-        console.log('[SEARCH] Refreshing search results to include new content');
+        logger.debug('[SEARCH] Refreshing search results to include new content');
         await performSearch(currentQuery, 0, false); // Don't append, replace
       } else {
         // Re-load browsing history to include new content
-        console.log('[SEARCH] Refreshing browsing history to include new content');
+        logger.debug('[SEARCH] Refreshing browsing history to include new content');
         await performSearch('', 0, false); // Empty query = browse all
       }
     } catch (error) {
@@ -1081,7 +1082,7 @@ function handleContentIndexed(data) {
 
 // Handle summary being updated for existing content
 function handleSummaryUpdated(data) {
-  console.log('[SEARCH] Summary updated for:', data.url);
+  logger.debug('[SEARCH] Summary updated for:', data.url);
 
   // Find if this URL is in current results and update it
   let updated = false;
@@ -1107,7 +1108,7 @@ function extractDomainFromUrl(url) {
 }
 
 function handleStatusUpdate(eventType, data) {
-  console.log(`[SEARCH] Status update: ${eventType}`, data);
+  logger.debug(`[SEARCH] Status update: ${eventType}`, data);
 
   switch (eventType) {
     case 'navigation_started':

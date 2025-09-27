@@ -3,6 +3,7 @@
  */
 import { aiBridge } from '../bridge/ai-bridge.js';
 import { keywordExtractor } from '../bridge/keyword-extractor.js';
+import { logger } from '../utils/logger.js';
 
 // DOM elements
 let chatMessages;
@@ -39,11 +40,11 @@ document.addEventListener('DOMContentLoaded', initializeChatPage);
 
 function initializeChatPage() {
   if (isInitialized) {
-    console.log('[CHAT] initializeChatPage: Already initialized, skipping duplicate call');
+    logger.debug('[CHAT] initializeChatPage: Already initialized, skipping duplicate call');
     return;
   }
 
-  console.log('[CHAT] initializeChatPage: Starting initialization');
+  logger.debug('[CHAT] initializeChatPage: Starting initialization');
   isInitialized = true;
 
   // Get DOM elements
@@ -278,7 +279,7 @@ async function generateResponse(userMessage) {
   showChatLoading();
   updateChatProgress('Initializing AI system...');
 
-  // TODO: Future enhancement - disable chat input during Chrome AI loading
+  // Note: Future enhancement to disable chat input during Chrome AI loading is tracked in documentation
   // This would prevent users from submitting more messages while Chrome AI is still loading
   // Implementation: Add a flag to disable the input field and submit button during loading
 
@@ -375,9 +376,9 @@ async function searchHistoryWithKeywords(extractedKeywords, originalQuery) {
     // Use extracted keywords as the search query instead of original message
     const keywordsQuery = extractedKeywords.keywords?.join(' ') || originalQuery;
 
-    console.log('[CHAT-DEBUG] Original query:', originalQuery);
-    console.log('[CHAT-DEBUG] Extracted keywords:', extractedKeywords);
-    console.log('[CHAT-DEBUG] Search query (keywords joined):', keywordsQuery);
+    logger.debug('[CHAT] Original query:', originalQuery);
+    logger.debug('[CHAT] Extracted keywords:', extractedKeywords);
+    logger.debug('[CHAT] Search query (keywords joined):', keywordsQuery);
 
     const response = await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -969,7 +970,7 @@ async function loadChatPrefs() {
     // Load input disabling preference (default: false - don't disable)
     shouldDisableInputDuringProcessing = !!(result.aiPrefs?.disableInputDuringProcessing);
   } catch (e) {
-    console.debug('[CHAT] Failed to load aiPrefs');
+    logger.debug('[CHAT] Failed to load aiPrefs');
   }
 }
 

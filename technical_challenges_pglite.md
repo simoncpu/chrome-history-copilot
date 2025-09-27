@@ -216,14 +216,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_message_embedding_cosine
   ON chat_message_embedding USING ivfflat (embedding vector_cosine_ops)
   WITH (lists = 10);  -- Smaller list count for chat messages
 
--- Alternative indexes for other distance metrics
--- CREATE INDEX idx_pages_embedding_l2
---   ON pages USING ivfflat (embedding vector_l2_ops)
---   WITH (lists = 100);  -- For L2 distance searches
-
--- CREATE INDEX idx_pages_embedding_ip
---   ON pages USING ivfflat (embedding vector_ip_ops)
---   WITH (lists = 100);  -- For inner product searches
+-- Alternative indexes for other distance metrics can be created if needed:
+-- L2 distance: CREATE INDEX ON pages USING ivfflat (embedding vector_l2_ops)
+-- Inner product: CREATE INDEX ON pages USING ivfflat (embedding vector_ip_ops)
 
 -- Full-text search index
 CREATE INDEX IF NOT EXISTS idx_pages_fts

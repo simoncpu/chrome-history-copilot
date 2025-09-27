@@ -2,6 +2,7 @@
  * AI-Powered Browser History - Offscreen Document
  * Handles PGlite database, embeddings, and heavy processing tasks
  */
+import { logger } from './utils/logger.js';
 
 // Initialize offscreen document
 
@@ -335,14 +336,14 @@ async function refreshAiPrefs() {
       };
     }
   } catch (e) {
-    console.debug('[OFFSCREEN] Failed to load aiPrefs; using defaults');
+    logger.debug('[OFFSCREEN] Failed to load aiPrefs; using defaults');
   }
 }
 
 // Database initialization
 async function initializeDatabase() {
   try {
-    console.log('[DB] Initializing PGlite database with IndexedDB storage');
+    logger.info('[DB] Initializing PGlite database with IndexedDB storage');
 
     // Import PGlite and vector extension
     const { PGlite } = await import(chrome.runtime.getURL('lib/pglite.js'));
@@ -363,7 +364,7 @@ async function initializeDatabase() {
     // Enable pgvector extension
     await pglite.exec('CREATE EXTENSION IF NOT EXISTS vector');
 
-    console.log('[DB] ✅ Using IndexedDB storage - safe for Chrome extension');
+    logger.info('[DB] ✅ Using IndexedDB storage - safe for Chrome extension');
 
     // Create database wrapper with our API
     db = new DatabaseWrapper(pglite);
@@ -382,7 +383,7 @@ async function initializeDatabase() {
     });
     console.log('[QUEUE-NOTIFY] ✅ Queue listener registered successfully');
 
-    console.log('[DB] Database initialized successfully');
+    logger.info('[DB] Database initialized successfully');
 
   } catch (error) {
     console.error('[DB] Failed to initialize PGlite:', error);
@@ -624,7 +625,7 @@ class DatabaseWrapper {
       ]);
 
       const insertedId = result.rows[0]?.id;
-      console.log(`[DB] Page ${isNewPage ? 'inserted' : 'updated'} successfully with ID: ${insertedId}`);
+      logger.debug(`[DB] Page ${isNewPage ? 'inserted' : 'updated'} successfully with ID: ${insertedId}`);
 
       return { id: insertedId, isNew: isNewPage };
     } catch (error) {
@@ -922,7 +923,7 @@ class DatabaseWrapper {
       queryEmbedding
     } = options;
 
-    console.log('[DB] Searching with keywords:', keywords);
+    logger.debug('[DB] Searching with keywords:', keywords);
 
     // Build enhanced query with keyword filters
     let textQuery = query;
@@ -1044,12 +1045,12 @@ class DatabaseWrapper {
       `, [threadId, role, content]);
 
       if (duplicateCheck.rows.length > 0) {
-        console.log('[DB] Duplicate message detected, skipping save:', duplicateCheck.rows[0].id);
+        logger.debug('[DB] Duplicate message detected, skipping save:', duplicateCheck.rows[0].id);
         return duplicateCheck.rows[0].id;
       }
 
       const messageId = `${threadId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      console.log('[DB] Saving new chat message:', messageId, 'role:', role, 'content length:', content.length);
+      logger.debug('[DB] Saving new chat message:', messageId, 'role:', role, 'content length:', content.length);
 
       await this.db.query(`
         INSERT INTO chat_message (id, thread_id, role, content)
@@ -1125,7 +1126,7 @@ class DatabaseWrapper {
         AND thread_id = $1
       `, [threadId]);
 
-      console.log('[DB] Removed', result.rowCount || 0, 'duplicate messages');
+      logger.debug('[DB] Removed', result.rowCount || 0, 'duplicate messages');
       return result.rowCount || 0;
     } catch (error) {
       console.error('[DB] Failed to deduplicate chat messages:', error);
@@ -1391,7 +1392,7 @@ async function trySummarizeOffscreen(text, url, title) {
       }
     }
 
-    // TODO(ai-canary): Legacy API fallback (prototype) — revisit and remove if no longer needed
+    // Legacy Chrome AI API fallback for older Chrome versions - maintained for compatibility
     if (globalThis?.Summarizer) {
       try {
         const summarizer = await globalThis.Summarizer.create({
@@ -1710,9 +1711,9 @@ async function search({ query, keywords, mode = 'hybrid-rerank', limit = 25, off
       return await getCombinedHistory({ limit, offset });
     }
 
-    console.log('[SEARCH] Query:', query);
+    logger.debug('[SEARCH] Query:', query);
     if (keywords) {
-      console.log('[SEARCH] Extracted keywords:', keywords);
+      logger.debug('[SEARCH] Extracted keywords:', keywords);
     }
 
     // For search queries, get results from both sources

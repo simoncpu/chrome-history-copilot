@@ -1,6 +1,7 @@
 /**
  * AI History Debug - Debug Page Controller
  */
+import { logger } from './utils/logger.js';
 
 
 // DOM elements
@@ -126,7 +127,7 @@ function initializeDebugPage() {
   initializeDOMElements();
 
   if (!pageCount || !sqlQuery) {
-    console.error('[DEBUG] Required DOM elements not found');
+    logger.error('[UI] Required DOM elements not found');
     return;
   }
 
@@ -402,7 +403,7 @@ async function connectToOffscreen() {
       throw new Error('Invalid response from offscreen document');
     }
   } catch (error) {
-    console.error('[DEBUG] Connection failed:', error);
+    logger.error('[CONNECTION] Failed to connect:', error);
     updateStatus('offline', 'Disconnected');
     log(`Connection failed: ${error.message}`, 'error');
 
@@ -448,7 +449,7 @@ async function refreshStatistics() {
     // Also refresh queue stats
     await handleRefreshQueueStats();
   } catch (error) {
-    console.error('[DEBUG] Failed to refresh statistics:', error);
+    logger.error('[STATS] Failed to refresh statistics:', error);
     log(`Failed to refresh statistics: ${error.message}`, 'error');
   }
 }
@@ -517,7 +518,7 @@ async function handleExecuteQuery() {
     log('Query executed successfully', 'info');
 
   } catch (error) {
-    console.error('[DEBUG] Query execution failed:', error);
+    logger.error('[SQL] Query execution failed:', error);
     log(`Query failed: ${error.message}`, 'error');
     hideQueryResults();
   } finally {
@@ -696,7 +697,7 @@ async function handleClearModelCache() {
 
     log('Model cache cleared successfully', 'info');
   } catch (error) {
-    console.error('[DEBUG] Failed to clear model cache:', error);
+    logger.error('[CACHE] Failed to clear model cache:', error);
     log(`Failed to clear model cache: ${error.message}`, 'error');
   }
 }
@@ -728,7 +729,7 @@ async function handleClearDatabase() {
     log('Database cleared successfully', 'warn');
     await refreshStatistics();
   } catch (error) {
-    console.error('[DEBUG] Failed to clear database:', error);
+    logger.error('[DB] Failed to clear database:', error);
     log(`Failed to clear database: ${error.message}`, 'error');
   } finally {
     hideProgress();
@@ -1068,7 +1069,7 @@ async function handleRefreshQueueStats() {
     log(`Queue stats: ${stats.queueLength} queued, ${stats.completed} completed, ${stats.failed} failed`, 'info');
 
   } catch (error) {
-    console.error('[DEBUG] Failed to refresh queue stats:', error);
+    logger.error('[QUEUE] Failed to refresh queue stats:', error);
     log(`Failed to refresh queue stats: ${error.message}`, 'error');
   }
 }
@@ -1095,7 +1096,7 @@ async function handleProcessQueue() {
     }, 1000);
 
   } catch (error) {
-    console.error('[DEBUG] Failed to process queue:', error);
+    logger.error('[QUEUE] Failed to process queue:', error);
     log(`Failed to process queue: ${error.message}`, 'error');
   }
 }
@@ -1124,7 +1125,7 @@ async function handleClearQueue() {
     await handleRefreshQueueStats();
 
   } catch (error) {
-    console.error('[DEBUG] Failed to clear queue:', error);
+    logger.error('[QUEUE] Failed to clear queue:', error);
     log(`Failed to clear queue: ${error.message}`, 'error');
   }
 }
@@ -1168,7 +1169,7 @@ async function addTestQueueItem() {
 
   } catch (error) {
     log(`❌ Failed to add test queue item: ${error.message}`, 'error');
-    console.error('[DEBUG] Add test queue item failed:', error);
+    logger.error('[QUEUE] Add test queue item failed:', error);
   }
 }
 

@@ -8,14 +8,14 @@ Audience: Engineers building the Chrome extension described here and agents edit
 
 - Ship a Chrome MV3 extension that provides “LLM‑powered browser history” using Chrome’s on‑device AI APIs in Chrome Canary.
 - Store and search history locally using PGlite with pgvector for vector similarity search and PostgreSQL full-text search.
-- Default query mode: Hybrid retrieval with reranking (two‑stage) as described in technical_challenges_pglite.md.
+- Default query mode: Hybrid retrieval with reranking (two‑stage) as described in docs/pglite.md.
 - Offer advanced modes: Hybrid (RRF), Text‑only (PostgreSQL full-text search), Vector‑only.
 - UI delivered via Chrome Side Panel with two pages the user can switch between:
   1) `history_search.html` (default)
   2) `history_chat.html` (Prompt API‑powered chat)
 - Provide a dev/debug page `debug.html` (DB explorer + Clear DB), also reachable from the extension’s context menu.
 
-See also: technical_challenges_pglite.md, technical_challenges_transformer.md, technical_challenges_chrome_api.md, constitution.md.
+See also: docs/pglite.md, docs/transformer.md, docs/chrome_api.md, constitution.md.
 
 ## Tech Stack
 - PGlite (lightweight PostgreSQL in WASM)
@@ -82,9 +82,9 @@ See also: technical_challenges_pglite.md, technical_challenges_transformer.md, t
 Bundled libraries are present under `chrome-extension/lib/` in this repo.
 
 Re‑use and adapt working patterns/code as documented in:
-- technical_challenges_pglite.md (embedding, vector search with pgvector, PostgreSQL full-text search, hybrid + rerank, RRF)
-- technical_challenges_transformer.md (Transformers.js configuration and constraints)
-- technical_challenges_chrome_api.md (Chrome AI Prompt/Summarizer usage)
+- docs/pglite.md (embedding, vector search with pgvector, PostgreSQL full-text search, hybrid + rerank, RRF)
+- docs/transformer.md (Transformers.js configuration and constraints)
+- docs/chrome_api.md (Chrome AI Prompt/Summarizer usage)
 - constitution.md (conventions and packaging)
 
 ## Recent Implementation Updates (January 2025)
@@ -183,8 +183,8 @@ Performance/UX
 
 ## Embeddings and Models (Transformers.js)
 
-- Default embedding model: lightweight sentence embedding model with output dimension ~384 (e.g., MiniLM‑L6‑v2 class). Use the choice and configuration documented in technical_challenges_transformer.md.
-- Load in offscreen document with Workers disabled per CSP constraints (see technical_challenges_transformer.md); ensure ONNX runtime is available.
+- Default embedding model: lightweight sentence embedding model with output dimension ~384 (e.g., MiniLM‑L6‑v2 class). Use the choice and configuration documented in docs/transformer.md.
+- Load in offscreen document with Workers disabled per CSP constraints (see docs/transformer.md); ensure ONNX runtime is available.
 - API surface:
   - `embed(text: string | string[]): Float32Array | Float32Array[]`
 - Caching: allow Transformers.js to cache model artifacts (browser storage). Provide a toggle to clear model cache in debug.
@@ -206,7 +206,7 @@ Stage 2 — Reranking:
 - For merged candidates, compute a hybrid score and apply a lightweight reranker:
   - Base score = `w_vec * cosine + w_text * text_rank_norm`
   - Add recency and popularity features: `+ w_recency * recencyBoost + w_visits * visitBoost`
-  - Optionally apply a cross‑encoder reranker from Transformers.js when device allows (guarded by a setting; see technical_challenges_transformer.md). Fallback to base score if reranker unavailable.
+  - Optionally apply a cross‑encoder reranker from Transformers.js when device allows (guarded by a setting; see docs/transformer.md). Fallback to base score if reranker unavailable.
 - Return top N (e.g., 20–50) with full metadata.
 
 Advanced Modes (user‑selectable in UI’s Advanced panel):
@@ -331,7 +331,7 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 - `offscreen.html`/`offscreen.js` responsibilities:
   - Initialize PGlite with pgvector extension and ensure schema.
-  - Configure pgvector for vector similarity search as documented in technical_challenges_pglite.md.
+  - Configure pgvector for vector similarity search as documented in docs/pglite.md.
   - Initialize Transformers.js (workers disabled per CSP constraints per prior prototype notes).
   - Expose handlers: `ingestPage`, `search(query, mode, limit)`, `embed(text)`, `summarize(text)`, `clearDb()`, etc.
 
@@ -375,9 +375,9 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 
 ## Reuse From Local Docs
 
-- technical_challenges_pglite.md: PGlite + pgvector setup, IndexedDB configuration, API surface, RRF, and hybrid + rerank details
-- technical_challenges_transformer.md: Transformers.js configuration (workers disabled) and embedding/reranking pipeline
-- technical_challenges_chrome_api.md: Chrome AI Prompt API wiring and chat interaction patterns
+- docs/pglite.md: PGlite + pgvector setup, IndexedDB configuration, API surface, RRF, and hybrid + rerank details
+- docs/transformer.md: Transformers.js configuration (workers disabled) and embedding/reranking pipeline
+- docs/chrome_api.md: Chrome AI Prompt API wiring and chat interaction patterns
 
 Ignore
 - Any sidecar processes and mock embedding implementations. Always use pgvector and Transformers.js here.
@@ -499,7 +499,7 @@ async function answerQuery(query) {
 - Do not introduce external analytics/telemetry.
 - Keep default mode Hybrid+Rerank. Other modes are advanced.
 - Keep UI minimal and fast; side panel only. No separate full‑tab UI unless explicitly requested.
-- Re‑use the approaches documented in the local technical_challenges_* docs; avoid reinventing.
+- Re‑use the approaches documented in the docs/* files; avoid reinventing.
 - When in doubt, prefer local‑first, offline‑first behavior.
 - Update @chrome-extension/debug.html to show SQL queries or things that the chrome extension actually uses
 - Ignore folders that are named prototype_*/ unless explicitly referenced.

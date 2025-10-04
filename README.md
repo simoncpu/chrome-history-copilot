@@ -1,4 +1,4 @@
-# AI-Powered Browser History
+# ![Chrome History Copilot Icon](chrome-extension/icons/48.png "Browser Copilot Icon") Chrome History Copilot
 
 A Chrome extension that makes your browsing history truly searchable and queryable using AI, while keeping everything private and running locally on your device.
 
@@ -15,7 +15,7 @@ This Chrome extension captures and indexes your browser history locally, then le
   1. Search page (default) - search your history with different modes
   2. Chat page - conversational interface powered by Chrome's Prompt API
 - **Debug page** for database management and troubleshooting
-- **Local‑first** — no browsing data leaves your device. Optional model downloads can be enabled.
+- **Local‑first** - no browsing data leaves your device. Optional model downloads can be enabled.
 
 ## How it works
 
@@ -33,7 +33,7 @@ Everything runs locally by default. No browsing data is ever transmitted. If you
 
 ## Requirements
 
-- Chrome Canary with on-device AI APIs enabled
+- Chrome Canary with on-device AI APIs enabled (see [HOWTO_CANARY.md](HOWTO_CANARY.md))
 - No external dependencies or accounts required by default; optional remote downloads for models can be enabled.
 
 ## Installation
@@ -43,6 +43,10 @@ Everything runs locally by default. No browsing data is ever transmitted. If you
 3. Click the extension icon to open the side panel and start searching your history
 
 Your browsing history becomes a searchable, queryable knowledge base that you can interact with naturally.
+
+## Why Chrome Canary?
+
+The extension uses Chrome's on‑device AI APIs (Prompt/Language Model and Summarizer), which are experimental and available in Chrome Canary behind feature flags. Without Canary, chat and summarization features won't be available. Follow the setup guide in [HOWTO_CANARY.md](HOWTO_CANARY.md).
 
 ## Network Use (Optional)
 

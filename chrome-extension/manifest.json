@@ -1,15 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "AI-Powered Browser History",
+  "name": "History Copilot",
   "version": "1.0.0",
   "description": "Smart search and chat for your browsing history using on-device AI",
-
   "icons": {
     "16": "icons/16.png",
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-
   "action": {
     "default_icon": {
       "16": "icons/16.png",
@@ -18,15 +16,12 @@
     },
     "default_title": "AI History Search"
   },
-
   "side_panel": {
     "default_path": "sidepanel/history_search.html"
   },
-
   "background": {
     "service_worker": "background.js"
   },
-
   "permissions": [
     "history",
     "sidePanel",
@@ -38,12 +33,10 @@
     "offscreen",
     "webNavigation"
   ],
-
   "optional_host_permissions": [
     "https://*/*",
     "http://*/*"
   ],
-
   "web_accessible_resources": [
     {
       "resources": [
@@ -54,18 +47,23 @@
         "lib/vector/**",
         "lib/models/**"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
-
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content-extractor.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content-extractor.js"
+      ],
       "run_at": "document_idle"
     }
   ],
-
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://hf.co https://*.hf.co https://cdn.jsdelivr.net;"
   }

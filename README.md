@@ -64,6 +64,10 @@ Notes:
 - Favicon thumbnails are loaded from Google’s favicon service (`https://www.google.com/s2/favicons`) using only the site hostname.
 - UI fonts: the side panel references Google Fonts in CSS. You can remove that import for a stricter local‑only UI; it is not required for functionality.
 
+## License
+
+MIT License - see [LICENSE](LICENSE) for details
+
 ## Author
 
 Simon Cornelius P. Umacob <df51if9yh@mozmail.com>

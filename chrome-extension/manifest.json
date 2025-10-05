@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "History Copilot",
   "version": "1.0.0",
+  "minimum_chrome_version": "143.0.7448.0",
   "description": "Smart search and chat for your browsing history using on-device AI",
   "icons": {
     "16": "icons/16.png",

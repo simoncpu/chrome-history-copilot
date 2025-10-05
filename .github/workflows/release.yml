@@ -1,0 +1,41 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create zip
+        run: |
+          cd chrome-extension
+          zip -r ../history-copilot-${{ github.ref_name }}.zip . -x "*.git*" -x "*node_modules*" -x "*.DS_Store"
+          cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: history-copilot-${{ github.ref_name }}.zip
+          body: |
+            ## Installation Instructions
+
+            1. Download `history-copilot-${{ github.ref_name }}.zip`
+            2. Extract the zip file
+            3. Open `chrome://extensions` in Chrome Canary (version 143+)
+            4. Enable "Developer mode" (toggle in top-right corner)
+            5. Click "Load unpacked"
+            6. Select the extracted `chrome-extension` folder
+
+            **Requirements:**
+            - Chrome Canary 143.0.7448.0 or later
+            - Chrome AI flags enabled (see README)
+          generate_release_notes: true

@@ -8,24 +8,24 @@ This Chrome extension captures and indexes your browser history locally, then le
 
 ## Key Features
 
-- **Smart search** through your history using hybrid retrieval (combines keyword search + semantic similarity)
-- **Chat interface** where you can ask questions about your browsing history and get AI-powered answers with links
-- **Multiple search modes**: Hybrid+Rerank (default), Hybrid (RRF), Text-only, Vector-only
-- **Side panel UI** with two modes:
+- Smart search through your history using hybrid retrieval (combines keyword search + semantic similarity)
+- Chat interface where you can ask questions about your browsing history and get AI-powered answers with links
+- Multiple search modes: Hybrid+Rerank (default), Hybrid (RRF), Text-only, Vector-only
+- Side panel UI with two modes:
   1. Search page (default) - search your history with different modes
   2. Chat page - conversational interface powered by Chrome's Prompt API
-- **Debug page** for database management and troubleshooting
-- **Local‑first** - no browsing data leaves your device. Optional model downloads can be enabled.
+- Debug page for database management and troubleshooting
+- Local‑first - no browsing data leaves your device. Optional model downloads can be enabled.
 
 ## How it works
 
 The extension uses modern AI techniques to understand the meaning and context of web pages you visit:
 
-- **Captures** your browser history automatically as you browse
-- **Indexes** page content using both traditional keyword search and AI embeddings for semantic understanding
-- **Stores** everything locally using PGlite (PostgreSQL in WASM) with pgvector for vector similarity search
-- **Searches** using hybrid retrieval that combines the best of keyword matching and AI similarity
-- **Answers** questions about your history using Chrome's on-device AI (Chrome Canary required)
+- Captures your browser history automatically as you browse
+- Indexes page content using both traditional keyword search and AI embeddings for semantic understanding
+- Stores everything locally using PGlite (PostgreSQL in WASM) with pgvector for vector similarity search
+- Searches using hybrid retrieval that combines the best of keyword matching and AI similarity
+- Answers questions about your history using Chrome's on-device AI (Chrome Canary required)
 
 ## Privacy
 
@@ -33,16 +33,56 @@ Everything runs locally by default. No browsing data is ever transmitted. If you
 
 ## Requirements
 
-- Chrome Canary with on-device AI APIs enabled (see [HOWTO_CANARY.md](HOWTO_CANARY.md))
-- No external dependencies or accounts required by default; optional remote downloads for models can be enabled.
+- Chrome Canary 143.0.7448.0 or later
+- Chrome AI flags enabled (see [HOWTO_CANARY.md](HOWTO_CANARY.md) for detailed setup)
 
 ## Installation
 
-1. Load the unpacked extension in Chrome Canary
-2. Enable required Chrome AI flags
-3. Click the extension icon to open the side panel and start searching your history
+### Step 1: Download the Extension
 
-Your browsing history becomes a searchable, queryable knowledge base that you can interact with naturally.
+Download the latest release from the [Releases page](https://github.com/simoncpu/chrome-history-copilot/releases):
+- Download `history-copilot-v*.zip` from the latest release
+- Extract the zip file to a location on your computer
+
+### Step 2: Enable Chrome AI Features
+
+Follow the complete setup guide in [HOWTO_CANARY.md](HOWTO_CANARY.md), or quick setup:
+
+1. Open Chrome Canary and navigate to `chrome://flags`
+2. Enable the following flags:
+   - `chrome://flags/#optimization-guide-on-device-model` → **Enabled**
+   - `chrome://flags/#prompt-api-for-gemini-nano` → **Enabled**
+   - `chrome://flags/#summarization-api-for-gemini-nano` → **Enabled**
+3. Restart Chrome Canary
+
+### Step 3: Load the Extension
+
+1. Open `chrome://extensions` in Chrome Canary
+2. Enable "Developer mode" using the toggle in the top-right corner
+3. Click "Load unpacked"
+4. Select the extracted `chrome-extension` folder from Step 1
+5. The extension icon should appear in your toolbar
+
+### Step 4: Grant Permissions (Important)
+
+The extension needs site access to extract page content:
+- Click the extension icon and go to the Debug page
+- Use "Grant All Sites Access" or grant access per-site as needed
+- Alternatively, right-click the extension icon → "This can read and change site data" → "On all sites"
+
+### Step 5: Start Using
+
+Click the extension icon to open the side panel and start searching your history. Your browsing history becomes a searchable, queryable knowledge base that you can interact with naturally.
+
+## Creating a Release (For Maintainers)
+
+To create a new release:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions will automatically create a release with the zipped extension.
 
 ## Why Chrome Canary?
 

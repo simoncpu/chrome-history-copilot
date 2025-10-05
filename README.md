@@ -2,6 +2,8 @@
 
 A Chrome extension that makes your browsing history truly searchable and queryable using AI, while keeping everything private and running locally on your device.
 
+![Chrome History screenshot](images/screenshot_chrome_history_copilot.png)
+
 ## What it does
 
 This Chrome extension captures and indexes your browser history locally, then lets you search through it using smart AI-powered techniques. You can either search directly or have conversations about your browsing history using Chrome's built-in AI.

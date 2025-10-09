@@ -161,7 +161,7 @@ async function handleMessage(message, sendResponse) {
         await refreshAiPrefs();
         // If remote warm is enabled, attempt warm-up in background
         if (aiPrefs.enableRemoteWarm) {
-          try { startRemoteWarm(); } catch {}
+          try { startRemoteWarm(); } catch { }
         }
         sendResponse({ status: 'ok', aiPrefs });
         break;
@@ -171,7 +171,7 @@ async function handleMessage(message, sendResponse) {
           await refreshAiPrefs();
           await initializeEmbeddings();
           if (aiPrefs.enableRemoteWarm) {
-            try { startRemoteWarm(); } catch {}
+            try { startRemoteWarm(); } catch { }
           }
           sendResponse({ status: 'reloaded' });
         } catch (e) {
@@ -314,7 +314,7 @@ async function performInitialization() {
     // Initialize embedding model
     await initializeEmbeddings();
     if (aiPrefs.enableRemoteWarm) {
-      try { startRemoteWarm(); } catch {}
+      try { startRemoteWarm(); } catch { }
     }
 
     isInitialized = true;
@@ -878,9 +878,12 @@ class DatabaseWrapper {
     candidates.forEach(d => visitVals.push(Number(d.visit_count) || 0));
     const maxVisits = Math.max(1, ...visitVals);
 
-    // Scoring weights: optimized for personal browsing history
-    const wVec = 0.3, wTextRank = 0.4, wRec = 0.2, wVis = 0.1;
-    // Additional boosts: title=0.15, domain=0.1, url=0.08
+    // Scoring weights: normalized to 1.0 for proper blending with RRF
+    // Vector and text search already capture title/domain/URL matches
+    const wVec = 0.40;      // Semantic similarity (embeddings)
+    const wTextRank = 0.30; // Lexical matching (PostgreSQL FTS)
+    const wRec = 0.20;      // Recency boost (exponential decay)
+    const wVis = 0.10;      // Visit frequency (log-scaled)
 
     const scored = candidates.map(doc => {
       const vDist = vecDistMap.get(doc.id);
@@ -895,12 +898,10 @@ class DatabaseWrapper {
       const vc = Number(doc.visit_count) || 0;
       const vis = Math.log(vc + 1) / Math.log(maxVisits + 1);
 
-      const titleBoost = doc.title && String(doc.title).toLowerCase().includes(String(query).toLowerCase()) ? 0.15 : 0;
-      const domainBoost = doc.domain && String(doc.domain).toLowerCase().includes(String(query).toLowerCase()) ? 0.1 : 0;
-      const urlBoost = doc.url && String(doc.url).toLowerCase().includes(String(query).toLowerCase()) ? 0.08 : 0;
+      // Base score: weighted combination normalized to [0, 1]
+      const base = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis);
 
-      const boosts = Math.min(titleBoost + domainBoost + urlBoost, 0.25);
-      const base = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis) + boosts;
+      // Blend base score (95%) with RRF score (5%) for final ranking
       const finalScore = base > 0 ? (0.95 * base + 0.05 * (doc.rrfScore || 0)) : (doc.rrfScore || 0);
 
       return {
@@ -910,14 +911,11 @@ class DatabaseWrapper {
         vScore,
         tScore,
         recency: rec,
-        visitsNorm: vis,
-        titleBoost,
-        domainBoost,
-        urlBoost
+        visitsNorm: vis
       };
     })
-    .sort((a, b) => b.finalScore - a.finalScore)
-    .slice(0, needCount);
+      .sort((a, b) => b.finalScore - a.finalScore)
+      .slice(0, needCount);
 
     return scored;
   }
@@ -1419,7 +1417,7 @@ async function trySummarizeOffscreen(text, url, title) {
           }
         }
       } finally {
-        try { await s?.destroy?.(); } catch {}
+        try { await s?.destroy?.(); } catch { }
       }
     }
 
@@ -1440,9 +1438,9 @@ async function trySummarizeOffscreen(text, url, title) {
             return summary;
           }
         } finally {
-          try { summarizer?.destroy?.(); } catch {}
+          try { summarizer?.destroy?.(); } catch { }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   } catch (e) {
     console.warn('[OFFSCREEN] trySummarizeOffscreen failed:', e?.message || e);
@@ -1834,7 +1832,7 @@ async function warmRemoteModel() {
 
 function startRemoteWarm() {
   if (modelStatus.using === 'remote' || modelStatus.warming) return;
-  try { void warmRemoteModel(); } catch {}
+  try { void warmRemoteModel(); } catch { }
 }
 
 // Embedding function

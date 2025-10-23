@@ -515,9 +515,9 @@ async function generateWithChromeAI(userMessage, isSearchQuery, searchResults, s
 
     // Determine what context to provide based on search intent and quality
     if (!isSearchQuery) {
-      // User is just chatting, don't append any search context
-      console.log('[CHAT] generateWithChromeAI: No search intent - conversational response');
-      searchContext = ''; // No search context for casual conversation
+      // User is just chatting, provide self-awareness context
+      console.log('[CHAT] generateWithChromeAI: No search intent - conversational response with self-awareness');
+      searchContext = await buildSelfAwarenessContext();
     } else {
       // User is searching for something
       if (searchResults.length === 0 || searchQuality.quality === 'none') {
@@ -788,7 +788,62 @@ function buildSearchContext(searchResults, quality = null) {
   return context;
 }
 
+/**
+ * Build self-awareness context for non-search queries
+ * Provides the AI with information about its capabilities and current data
+ */
+async function buildSelfAwarenessContext() {
+  console.log('[CHAT] buildSelfAwarenessContext: Building self-awareness context for casual conversation');
 
+  // Fetch current database stats
+  let pageCount = 0;
+  let embeddingCount = 0;
+
+  try {
+    const statsResponse = await chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'get-db-stats'
+    });
+
+    if (statsResponse && !statsResponse.error) {
+      pageCount = statsResponse.pageCount || 0;
+      embeddingCount = statsResponse.embeddingCount || 0;
+    }
+  } catch (error) {
+    console.warn('[CHAT] buildSelfAwarenessContext: Failed to fetch database stats:', error);
+  }
+
+  // - My GitHub URL, or source code, is available at https://github.com/simoncpu/chrome-history-copilot
+  // Build comprehensive self-awareness context
+  const context = `[SYSTEM INFORMATION - For your awareness only, do not echo this to the user]
+
+About your capabilities:
+- My name is History Copilot, I'm a hackathon project built by Simon Cornelius P. Umacob (simoncpu) for DevPost Hackathon.
+- You may contact my developer at df51if9yh@mozmail.com if you wish to provide feedback, report issues, or hire him.
+- My developer is based in the Philippines and is available for freelance work.
+- I am an AI assistant integrated with your local browser history
+- I can search your browsing history when you ask me to find specific information
+- I can have casual conversations and answer general questions
+- I remember our conversation history to maintain context
+
+Current data scope:
+- Your browser maintains ${pageCount} indexed pages from your browsing history
+- History retention: Past 90 days of browsing activity
+- I have access to ${embeddingCount} semantic embeddings for intelligent search
+- All data is stored locally on your device
+
+My limitations:
+- I can only access your LOCAL browser history, not the live internet
+- I cannot visit new websites or fetch current information from the web
+- I cannot perform actions like sending emails, making purchases, or modifying your browser
+- For specific searches, I work best when you use search-related queries like "find pages about..." or "show me articles on..."
+
+Current context: The user is having a casual conversation (not searching for specific pages).`;
+
+  console.log('[CHAT] buildSelfAwarenessContext: Context built, length:', context.length, 'characters');
+
+  return context;
+}
 
 function addAssistantMessage(content, searchResults = [], searchMetadata = null) {
   const messageDiv = document.createElement('div');

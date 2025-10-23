@@ -669,11 +669,20 @@ class DatabaseWrapper {
 
   async textSearch(query, limit, offset = 0) {
     try {
-      // Escape special characters and prepare query
-      const tsQuery = query.split(' ')
-        .filter(term => term.length > 0)
-        .map(term => `${term}:*`)
-        .join(' & ');
+      // Split query into words and build OR-based tsquery
+      const words = query.trim().split(/\s+/).filter(w => w.length > 0);
+
+      if (words.length === 0) {
+        return [];
+      }
+
+      // Sanitize words: remove special tsquery characters for safety
+      const sanitizeWord = (w) => w.replace(/[&|!():*'\\]/g, '');
+
+      // Build tsquery: word1:* | word2:* | word3:* (OR logic)
+      const tsQuery = words
+        .map(w => `${sanitizeWord(w)}:*`)
+        .join(' | ');
 
       const result = await this.db.query(`
         SELECT
@@ -683,7 +692,7 @@ class DatabaseWrapper {
           ts_rank_cd(content_tsvector, query) AS score,
           COALESCE(summary, title) AS snippet
         FROM pages,
-             plainto_tsquery('english', $1) AS query
+             to_tsquery('english', $1) AS query
         WHERE content_tsvector @@ query
           AND url NOT LIKE 'chrome://%'
           AND url NOT LIKE 'chrome-extension://%'
@@ -696,7 +705,7 @@ class DatabaseWrapper {
           AND url NOT LIKE 'javascript:%'
         ORDER BY text_rank_score DESC, last_visit_at DESC
         LIMIT $2 OFFSET $3
-      `, [query, limit, offset]);
+      `, [tsQuery, limit, offset]);
 
       return result.rows;
     } catch (error) {

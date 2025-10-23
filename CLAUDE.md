@@ -114,109 +114,80 @@ Re‑use and adapt working patterns/code as documented in:
 
 ## Data Model and Schema
 
-Primary tables (one row per logical history document):
-- `pages`:
-  - `id` INTEGER PRIMARY KEY
-  - `url` TEXT UNIQUE
-  - `domain` TEXT
-  - `title` TEXT
-  - `content_text` TEXT (cleaned main content; optionally chunked, see below)
-  - `summary` TEXT NULL (optional, via Summarizer; computed lazily)
-  - `favicon_url` TEXT NULL
-  - `first_visit_at` INTEGER (ms)
-  - `last_visit_at` INTEGER (ms)
-  - `visit_count` INTEGER
+**Database**: PGlite (PostgreSQL in WASM) with pgvector extension for vector similarity search.
 
-Full-text search (using PostgreSQL):
-- Use PostgreSQL's built-in full-text search capabilities with tsvector/tsquery
-- Create GIN indexes on tsvector columns for efficient text search
+**Core Tables**:
+- `pages` - Main content table with integrated embeddings and full-text search
+- `chat_thread` and `chat_message` - Chat conversation persistence (200-message FIFO limit)
+- `summarization_queue` - Database-backed AI summarization queue with LISTEN/NOTIFY
 
-Vector column (pgvector):
-- Add `embedding` column to `pages` table:
-  - `embedding` vector(384)  // 384-dimensional vector
-  - Create index using: `CREATE INDEX ON pages USING ivfflat (embedding vector_cosine_ops)`
+**Key Features**:
+- **Vector search**: 384-dim embeddings with pgvector cosine similarity (`<=>` operator)
+- **Full-text search**: PostgreSQL tsvector/tsquery with automatic GIN indexes
+- **Hybrid retrieval**: RRF (Reciprocal Rank Fusion) + reranking for optimal results
+- **Browser history integration**: Merges PGlite indexed content with Chrome's 90-day history
 
-Notes
-- If pages are large, we may chunk content into subdocuments (e.g., `page_chunks` + `page_chunks_fts` + `chunk_embeddings`). Start with whole‑page embedding; add chunking later if recall is insufficient.
-- Use PostgreSQL triggers to automatically update tsvector columns when pages are inserted/updated.
-- Maintain vector embeddings through application code when content changes.
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for complete schema, indexes, and query patterns.
 
 
 ## Ingestion Pipeline
 
-- Listen to `chrome.history.onVisited` + `chrome.tabs.onUpdated({ status: 'complete' })` to detect likely ingestion points.
-- Use `chrome.scripting.executeScript` to extract main text from the active tab (Readability‑style or DOM heuristics). Avoid capturing sensitive inputs; never read inside password fields; honor extension permissions.
-- Persist/merge into `pages` (upsert by URL). Update `visit_count`, `last_visit_at`.
-- Generate embedding with Transformers.js (see below) and store in the `embedding` column.
-- Update tsvector column for full-text search indexing.
-- Queue substantial content (>100 chars) for AI summarization via database-backed queue system.
+**Content Extraction**:
+- Automatic content script runs on all HTTP/HTTPS pages at `document_idle`
+- Extracts main text using Readability-style DOM heuristics
+- Respects privacy: never captures password fields or sensitive inputs
 
-### AI Summarization Queue (Database-Backed)
-- **Architecture**: Uses PostgreSQL table `summarization_queue` with LISTEN/NOTIFY for instant processing
-- **No Polling**: Replaced 30-second intervals with real-time database notifications
-- **Persistent**: Queue survives extension restarts and can be queried via SQL in debug panel
-- **Status Tracking**: Items progress through states: `pending` → `processing` → `completed`/`failed`
-- **Retry Logic**: Failed items are retried up to 3 times before being marked as failed
-- **Rate Limiting**: 2-second delay between processing items to avoid overwhelming AI API
+**Processing Flow**:
+1. Listen for `chrome.history.onVisited` and `chrome.tabs.onUpdated`
+2. Extract page content via content scripts
+3. Generate 384-dim embedding with Transformers.js
+4. Upsert to `pages` table (updates `visit_count`, `last_visit_at`)
+5. Queue for AI summarization (content >100 chars)
 
-Queue Schema:
-```sql
-CREATE TABLE summarization_queue (
-  id SERIAL PRIMARY KEY,
-  url TEXT UNIQUE NOT NULL,
-  title TEXT,
-  domain TEXT,
-  content_text TEXT,
-  attempts INTEGER DEFAULT 0,
-  max_attempts INTEGER DEFAULT 3,
-  status TEXT DEFAULT 'pending',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  processed_at TIMESTAMP
-);
-```
+**AI Summarization Queue**:
+- Database-backed with PostgreSQL LISTEN/NOTIFY for instant processing
+- Persistent across extension restarts
+- Status tracking: `pending` → `processing` → `completed`/`failed`
+- Retry logic: up to 3 attempts with 2-second rate limiting
 
-Performance/UX
-- Run heavy work in offscreen document. Database-backed queue with instant notifications via LISTEN/NOTIFY.
-- Debounce repeated visits in short windows to avoid churn.
-- Queue processing starts immediately when new items are added (no polling delay).
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for queue schema and [offscreen.js](chrome-extension/offscreen.js) for processing logic.
 
 
 ## Embeddings and Models (Transformers.js)
 
-- Default embedding model: lightweight sentence embedding model with output dimension ~384 (e.g., MiniLM‑L6‑v2 class). Use the choice and configuration documented in docs/transformer.md.
-- Load in offscreen document with Workers disabled per CSP constraints (see docs/transformer.md); ensure ONNX runtime is available.
-- API surface:
-  - `embed(text: string | string[]): Float32Array | Float32Array[]`
-- Caching: allow Transformers.js to cache model artifacts (browser storage). Provide a toggle to clear model cache in debug.
-- Path config: set `env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('lib/')` so ONNX WASM loads from `chrome-extension://.../lib/`.
- - Runtime flags (match extension constraints):
-   - `env.backends.onnx.wasm.proxy = false`
-   - `env.backends.onnx.wasm.numThreads = 1`
-   - `env.backends.onnx.wasm.simd = false`
+**Model Configuration**:
+- **Local model** (default): `Xenova/bge-small-en-v1.5-quantized` (bundled, 384-dim output)
+- **Remote model** (optional): `Xenova/bge-small-en-v1.5` (full precision, user opt-in)
+- Load in offscreen document with workers disabled for MV3 compatibility
+
+**Runtime Configuration**:
+- Single-threaded, no SIMD (required for Chrome extension CSP)
+- Local-first: bundled model in `lib/models/`, optional remote warm-up
+- WASM files served from `lib/` directory
+
+> **Implementation Details**: See [docs/transformer.md](docs/transformer.md) for full Transformers.js configuration, CSP setup, and model loading patterns.
 
 
 ## Retrieval: Default Hybrid + Reranking (Two‑Stage)
 
-Stage 1 — Candidate Generation (Hybrid):
-- Run PostgreSQL full-text search using tsquery and vector similarity search using pgvector's cosine distance operators.
-- Take top K1 (PostgreSQL FTS) and top K2 (vector). Merge via RRF or weighted union to produce ~K candidates (e.g., 150–200).
-  - RRF score per list with `k = 60` (tunable), `rrf = 1/(k + rank)`.
+**Stage 1 — Candidate Generation (Hybrid)**:
+- Run PostgreSQL full-text search (tsvector/tsquery) and pgvector similarity search in parallel
+- Merge via RRF (Reciprocal Rank Fusion) with k=60: `rrf = 1/(k + rank)`
+- Generate ~150-200 candidate pool for reranking
 
-Stage 2 — Reranking:
-- For merged candidates, compute a hybrid score and apply a lightweight reranker:
-  - Base score = `w_vec * cosine + w_text * text_rank_norm`
-  - Add recency and popularity features: `+ w_recency * recencyBoost + w_visits * visitBoost`
-  - Optionally apply a cross‑encoder reranker from Transformers.js when device allows (guarded by a setting; see docs/transformer.md). Fallback to base score if reranker unavailable.
-- Return top N (e.g., 20–50) with full metadata.
+**Stage 2 — Reranking**:
+- Compute weighted score: semantic (40%), text relevance (30%), recency (20%), popularity (10%)
+- Normalize ts_rank (PostgreSQL TF-IDF) and cosine distances to [0, 1]
+- Apply recency boost (exponential decay) and visit frequency (log-scaled)
+- Return top N results (typically 20-50)
 
-Advanced Modes (user‑selectable in UI’s Advanced panel):
-- Hybrid (RRF) only (no stage‑2 reranker)
-- Text only (PostgreSQL full-text search with ts_rank)
-- Vector only (cosine similarity via pgvector)
+**Advanced Modes** (user-selectable):
+- **Hybrid + Rerank** (default) - Full two-stage pipeline
+- **Hybrid (RRF)** - Stage 1 only, no reranking
+- **Text only** - PostgreSQL full-text search with ts_rank
+- **Vector only** - Cosine similarity via pgvector
 
-Normalization & Scoring
-- Normalize ts_rank scores and cosine similarities to [0, 1] (e.g., z‑score or min‑max per candidate set) before weighted sum.
-- Suggested defaults: `w_vec=0.5, w_text=0.3, w_recency=0.1, w_visits=0.1` (tune as needed).
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for complete search algorithms, RRF implementation, and reranking scoring formulas.
 
 
 ## Browser History Integration
@@ -250,209 +221,112 @@ Two pages; user can toggle between them. Remember the last‑used page and searc
 - Provide clear empty state and robust error handling.
 
 2) history_chat.html
-- Chat interface, simple transcript; trim context pragmatically when it grows too large (e.g., keep last ~10–12 turns, or token budget ~4–8k where possible).
-- On submit:
-  - Retrieve candidates using the same Hybrid+Rerank pipeline.
-  - Prompt Chrome AI (global `LanguageModel` API) with system instructions that force link inclusion.
-  - Render answer with clickable links to top relevant pages and short rationales. Use an ellipsis loader while generating.
-- If LLM unavailable, fall back to a structured response builder that lists the top results with links and snippets.
+- **Two-stage chat search flow**:
+  1. **Keyword extraction**: Chrome AI analyzes query to determine intent and extract search keywords
+  2. **Enhanced search**: Uses extracted keywords for filtered hybrid search (if search query detected)
+  3. **Response generation**: Chrome AI generates conversational response with links to relevant pages
+- **Message persistence**: Chat history stored in PGlite with 200-message FIFO limit
+- **Session management**: Uses `initialPrompts` for context, `append()` for dynamic search results
 
+## Chrome AI Integration (Chat)
 
-## Prompt API Usage (Chat)
+**API Usage**:
+- Chrome 138+ global `LanguageModel` API (no fallback - requires Chrome AI availability)
+- Keyword extraction with JSON Schema `responseConstraint` for structured output
+- Session management: `LanguageModel.create({ initialPrompts, temperature, topK })`
+- Quota tracking: monitors `inputUsage` vs `inputQuota`, recreates sessions when needed
 
-- Create session with Chrome 138+ `LanguageModel.create()` or legacy `window.ai.languageModel.create()`. Prefer on‑device model in Canary if available; otherwise respect user settings before any network use.
-- System prompt should:
-  - Instruct model to answer based on provided history snippets only.
-  - Require inclusion of links for top results.
-  - Keep responses concise; use bullet points with titles and URLs.
-- Chat turn logic:
-  - Build a context block from top K retrieved items: `[title] — [url] — [summary or snippet]`.
-  - Provide the user’s query and the context block to `session.prompt`.
-  - Render streaming if available; otherwise show loader until completion.
+**Chat Flow**:
+1. Extract keywords with dedicated extraction session (low temperature, topK=1)
+2. Search history only if query is search-related (based on `is_search_query` flag)
+3. Generate response with conversation context + search results (if applicable)
+4. Persist both user and assistant messages to PGlite
+
+> **Implementation Details**: See [docs/chrome_api.md](docs/chrome_api.md) for Chrome AI integration patterns and [history_chat.js](chrome-extension/sidepanel/history_chat.js) for full chat flow.
 
 
 ## Debug Page (debug.html)
 
-**IMPORTANT**: The debug page MUST use actual production code for testing. Do NOT create separate versions of functions in debug.js. The goal is to test the exact same code path that users experience.
+Comprehensive debugging and testing interface accessible via context menu ("AI History: Debug").
 
-- **Site Permissions Management**:
-  - Check current site access for content extraction
-  - Grant site permissions with one-click buttons
-  - Links to Chrome extension settings for global permissions
-  - Troubleshooting guide for "Receiving end does not exist" errors
+**Key Features**:
+- **Site Permissions**: Check/grant host access for content extraction
+- **Chrome AI Testing**: Keyword extraction, Summarizer API, full chat flow testing with production code
+- **DB Explorer**: PostgreSQL query console with vector/FTS sample queries
+- **Queue Management**: Monitor and control AI summarization queue (LISTEN/NOTIFY debugging)
+- **Content Analysis**: Embedding status, search mode comparison, extraction statistics
+- **System Monitoring**: Live log viewer with filtering and export capabilities
 
-- **Chrome AI Integration Testing**:
-  - Real-time Chrome AI availability detection (Chrome 138+ global APIs with legacy fallback)
-  - Interactive keyword extraction testing with JSON Schema validation
-  - Summarizer API testing with content input and progress monitoring
-  - **Full chat search flow testing using production functions from `history_chat.js`**
-  - Step-by-step timing analysis of actual production code path
-  - Model download progress indicators and quota usage tracking
+**Testing Philosophy**: Debug page uses actual production code from `sidepanel/` and `bridge/` directories. No duplicate implementations - ensures accurate testing of user experience.
 
-- **DB Explorer**:
-  - Run arbitrary SQL (read‑only by default, with a guarded "Write mode" toggle)
-  - Inspect table counts, index health, and recent ingestion queue
-  - PostgreSQL-specific sample queries for vector operations and full-text search
-  - Buttons: Clear DB (drop and recreate tables), Clear Model Cache, Export DB, Import DB (optional)
-
-- **AI Summarization Queue Management**:
-  - Real-time queue stats (queued, processing, completed, failed)
-  - Currently processing item details with URL and progress
-  - Queue management buttons (Process Queue, Clear Queue, Reset Stuck Items)
-  - Advanced debugging tools: Add test items, monitor LISTEN/NOTIFY, show processing timeline
-  - Sample SQL queries for queue inspection and maintenance
-
-- **Content Analysis Tools**:
-  - Recent pages content analysis with embedding status
-  - Search mode performance comparison (hybrid, vector-only, text-only)
-  - Content extraction statistics and favicon loading status
-
-- **System Monitoring**:
-  - Live log viewer with filtering by level (info, warn, error, debug)
-  - Auto-refresh capabilities and log export functionality
-  - Performance metrics for search operations and AI model operations
-
-- **Context Menu Integration**: "AI History: Debug" entry opens `debug.html` in new tab for quick access
-
-### Debug Testing Requirements:
-- All testing functions MUST import and use production code from `sidepanel/` and `bridge/` directories
-- Functions should be accessed via `window.chatPageController` exports or direct imports
-- Never create duplicate implementations in `debug.js` - always use the actual production functions
-- This ensures debug results accurately reflect user experience
+> **See**: [debug.html](chrome-extension/debug.html) for complete interface layout and feature descriptions.
 
 
 ## Background and Offscreen Orchestration
 
-- `background.js` responsibilities:
-  - Register side panel default path.
-  - Create context menu and handle clicks to open `debug.html`.
-  - Ensure one offscreen document is created (`offscreen.html`) at startup/first use; reuse single instance.
-  - Provide a message router between UI and offscreen for DB/AI requests (request/response with IDs).
+**Service Worker** (`background.js`):
+- Register side panel and context menu
+- Create and manage single offscreen document instance
+- Route messages between UI and offscreen document
 
-- `offscreen.html`/`offscreen.js` responsibilities:
-  - Initialize PGlite with pgvector extension and ensure schema.
-  - Configure pgvector for vector similarity search as documented in docs/pglite.md.
-  - Initialize Transformers.js (workers disabled per CSP constraints per prior prototype notes).
-  - Expose handlers: `ingestPage`, `search(query, mode, limit)`, `embed(text)`, `summarize(text)`, `clearDb()`, etc.
+**Offscreen Document** (`offscreen.js`):
+- Initialize PGlite with pgvector extension
+- Load Transformers.js embedding model (workers disabled for MV3)
+- Expose message handlers: `ingestPage`, `search`, `embed`, `clearDb`, chat message operations
+- Manage AI summarization queue with LISTEN/NOTIFY
+
+> **Architecture**: All heavy processing (database, embeddings, AI) runs in offscreen document to avoid blocking UI. See [background.js](chrome-extension/background.js) and [offscreen.js](chrome-extension/offscreen.js) for implementation.
 
 
 ## State, Caching, and Persistence
 
-- `chrome.storage.local` keys:
-  - `searchMode` = 'hybrid-rerank' | 'hybrid-rrf' | 'text' | 'vector'
-  - `lastSidePanelPage` = 'search' | 'chat'
-  - `aiPrefs` = { enableReranker: boolean, allowCloudModel: boolean }
-- DB storage: PGlite database in IndexedDB (key: `ai-history-pglite`).
-- Model caches: Transformers.js default; provide clear action in debug.
+**Chrome Storage** (`chrome.storage.local`):
+- `searchMode` - Selected search mode (hybrid-rerank, hybrid-rrf, text, vector)
+- `lastSidePanelPage` - Last active tab (search or chat)
+- `aiPrefs` - AI preferences (enableReranker, enableRemoteWarm)
 
+**Database Storage**:
+- PGlite database persisted in IndexedDB (key: `ai-history-pglite`)
+- Automatic persistence across browser sessions
+- Model cache managed by Transformers.js
 
 ## UX Requirements
 
-- Always show favicon, title, readable URL, and short snippet/summary in results.
-- Show a visible loader during search and during chat generation.
-- Ensure results contain clickable links; in chat these MUST be present when any matches exist.
-- Remember the last used search mode and restore on load.
+- Display favicon, title, URL, and summary/snippet for all results
+- Show loading indicators during search and chat generation
+- Include clickable links in chat responses when matches exist
+- Persist and restore user preferences (search mode, scroll position, active tab)
 
 
 ## Error Handling and Fallbacks
 
-- If PostgreSQL full-text search fails, fallback to simple ILIKE or client-side keyword filtering.
-- If pgvector unavailable, run text‑only and surface a warning in debug.
-- If Transformers.js fails to load embeddings model, keep text‑only modes and allow retry from debug.
-- If reranker model heavy, gate behind `aiPrefs.enableReranker`. Default to base hybrid rerank without cross‑encoder.
-- If Prompt API session creation fails, use structured response fallback (top results list with links).
+**Search Fallbacks**:
+- PostgreSQL FTS failure → ILIKE pattern matching
+- pgvector unavailable → text-only mode with debug warning
+- Transformers.js load failure → text-only modes with retry option
 
+**Chrome AI Handling**:
+- Extension requires Chrome AI availability (no graceful degradation)
+- Clear error messages guide users to enable Chrome Canary AI flags
+- Specific errors for: unavailability, quota exceeded, model downloading
+
+> **See**: [docs/pglite.md](docs/pglite.md) and [docs/chrome_api.md](docs/chrome_api.md) for detailed error handling patterns.
 
 ## Coding Conventions
 
-- Language: Type‑safe JS where easy (JSDoc typedefs); ESM modules only; no bundler required to run, but small build step acceptable if needed for assets.
-- Keep files small and cohesive; prefer pure functions in offscreen services.
-- Use async/await; never block main/UI thread. Heavy work lives in offscreen.
-- Prefer named exports; avoid default exports except page scripts.
-- Avoid global mutable state; centralize settings access.
-- Logging: prefix logs with `[BG]`, `[OFFSCREEN]`, `[SEARCH]`, `[CHAT]`, `[DB]` for clarity; keep verbose logs behind a debug flag.
+- **Language**: ES modules, type-safe JS with JSDoc where useful
+- **Architecture**: Async/await, no main thread blocking, heavy work in offscreen
+- **Modules**: Named exports preferred, small cohesive files
+- **Logging**: Prefix with `[BG]`, `[OFFSCREEN]`, `[SEARCH]`, `[CHAT]`, `[DB]`
+- **State**: Avoid global mutable state, centralize settings in `chrome.storage.local`
 
+## Implementation References
 
-## Reuse From Local Docs
-
-- docs/pglite.md: PGlite + pgvector setup, IndexedDB configuration, API surface, RRF, and hybrid + rerank details
-- docs/transformer.md: Transformers.js configuration (workers disabled) and embedding/reranking pipeline
-- docs/chrome_api.md: Chrome AI Prompt API wiring and chat interaction patterns
-
-Ignore
-- Any sidecar processes and mock embedding implementations. Always use pgvector and Transformers.js here.
-
-
-## Example Pseudocode (Search)
-
-```js
-async function hybridSearch(query, { mode = 'hybrid-rerank', limit = 25 } = {}) {
-  // Handle empty queries: show combined history
-  if (!query || query.trim().length === 0) {
-    return await getCombinedHistory({ limit });
-  }
-
-  // Get results from both PGlite and Chrome history
-  const [pgliteResults, browserResults] = await Promise.allSettled([
-    // PGlite search with embeddings
-    (async () => {
-      const queryVec = await embed(query);
-      return await db.search(query, { mode, limit: Math.ceil(limit * 1.5), queryVec });
-    })(),
-    // Chrome browser history search (90-day filtered)
-    chrome.history.search({
-      text: query,
-      startTime: Date.now() - (90 * 24 * 60 * 60 * 1000)
-    })
-  ]);
-
-  // Merge and deduplicate results (PGlite takes priority)
-  const merged = mergeHistoryResults(
-    pgliteResults.value || [],
-    browserResults.value || []
-  );
-
-  return merged.slice(0, limit);
-}
-
-async function getCombinedHistory({ limit = 25 }) {
-  // Get all browser history from last 90 days
-  const browserHistory = await chrome.history.search({
-    text: '',
-    startTime: Date.now() - (90 * 24 * 60 * 60 * 1000),
-    maxResults: 1000
-  });
-
-  // Get PGlite entries (no search, just recent)
-  const pgliteResults = await db.search('', { mode: 'text', limit: 1000 });
-
-  // Merge, deduplicate, and sort by last visit time
-  return mergeHistoryResults(pgliteResults, browserHistory).slice(0, limit);
-}
-```
-
-
-## Example Pseudocode (Chat)
-
-```js
-async function answerQuery(query) {
-  const results = await hybridSearch(query, { mode: 'hybrid-rerank', limit: 20 });
-  if (!results.length) return 'No matches found in your history.';
-
-  const ctx = results.slice(0, 8).map(r => `- ${r.title}\n  ${r.url}\n  ${r.summary ?? r.snippet}`).join('\n');
-  const sys = `You answer using only the provided items. Always include links.`;
-  const prompt = `${sys}\n\nUser question: ${query}\n\nItems:\n${ctx}`;
-
-  try {
-    const session = await createLanguageSession(); // Uses Chrome 138+ API with fallback
-    const text = await session.prompt(prompt);
-    return text;
-  } catch (e) {
-    // Fallback structured response
-    return results.slice(0, 5).map(r => `• ${r.title} — ${r.url}`).join('\n');
-  }
-}
-```
+For detailed implementation patterns, see:
+- **[docs/pglite.md](docs/pglite.md)** - Database schema, vector search, RRF, hybrid reranking
+- **[docs/transformer.md](docs/transformer.md)** - Transformers.js config, embeddings, CSP constraints
+- **[docs/chrome_api.md](docs/chrome_api.md)** - Chrome AI integration, keyword extraction, chat flow
+- **[constitution.md](constitution.md)** - Extension design principles and governance
 
 
 ## Testing and Manual QA

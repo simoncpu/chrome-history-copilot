@@ -382,10 +382,19 @@ class KeywordExtractor {
   getExtractionSchema() {
     return {
       type: "object",
+      additionalProperties: false,
       properties: {
-        keywords: { type: "array", items: { type: "string" } }
+        is_search_query: {
+          type: "boolean",
+          description: "True if the user is searching for specific information, false if just chatting"
+        },
+        keywords: {
+          type: "array",
+          items: { type: "string" },
+          description: "General search terms (empty if not searching)"
+        }
       },
-      required: ["keywords"]
+      required: ["is_search_query", "keywords"]
     };
   }
 }

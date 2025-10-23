@@ -144,19 +144,20 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 
 -- Chat thread management for conversation persistence
+-- Note: Thread IDs are generated in application code (e.g., 'default', 'thread_xxx')
 CREATE TABLE IF NOT EXISTS chat_thread (
-  id TEXT PRIMARY KEY DEFAULT ('thread_' || generate_random_uuid()),
-  name TEXT DEFAULT 'Untitled Conversation',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Chat message retention with FIFO eviction (200 message limit)
+-- Chat message retention with FIFO eviction (200 message limit via manual pruning)
+-- Note: Message IDs are generated in application code (e.g., 'thread-timestamp-random')
 CREATE TABLE IF NOT EXISTS chat_message (
-  id TEXT PRIMARY KEY DEFAULT ('msg_' || generate_random_uuid()),
+  id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES chat_thread(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
   content TEXT NOT NULL,
+  metadata JSONB,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -171,34 +172,9 @@ CREATE TABLE IF NOT EXISTS chat_message_embedding (
 CREATE INDEX IF NOT EXISTS idx_chat_message_thread_created
   ON chat_message(thread_id, created_at);
 
--- Trigger function for automatic FIFO eviction (keeps newest 200 messages per thread)
-CREATE OR REPLACE FUNCTION enforce_message_limit()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Delete oldest messages beyond 200 limit per thread
-  DELETE FROM chat_message
-  WHERE thread_id = NEW.thread_id
-    AND id NOT IN (
-      SELECT id FROM chat_message
-      WHERE thread_id = NEW.thread_id
-      ORDER BY created_at DESC
-      LIMIT 200
-    );
-
-  -- Update thread's last message timestamp
-  UPDATE chat_thread
-  SET last_message_at = NEW.created_at
-  WHERE id = NEW.thread_id;
-
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger to enforce 200-message FIFO limit automatically
-CREATE TRIGGER trig_enforce_message_limit
-  AFTER INSERT ON chat_message
-  FOR EACH ROW
-  EXECUTE FUNCTION enforce_message_limit();
+-- Note: FIFO eviction (200 message limit) is implemented via manual pruning in application code
+-- See DatabaseWrapper.pruneChatMessages() and DatabaseWrapper.saveChatMessage()
+-- This is called automatically after saving chat messages to maintain the limit
 
 -- Create indexes for efficient search
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
@@ -473,38 +449,58 @@ async function getBrowserHistoryWithKeywords(extractedKeywords, originalQuery, l
 
 ## Chat Message Persistence
 
-The chat system stores conversation history in PGlite with automatic FIFO eviction:
+The chat system stores conversation history in PGlite with manual FIFO eviction:
 
 ```javascript
-// Store chat message with automatic thread management
-async function storeChatMessage(db, threadId, role, content) {
+// Store chat message with automatic thread management and manual pruning
+async function saveChatMessage(db, threadId, role, content, metadata = null) {
   // Create thread if it doesn't exist
   await db.query(`
     INSERT INTO chat_thread (id) VALUES ($1)
     ON CONFLICT (id) DO NOTHING
   `, [threadId]);
 
-  // Insert message (trigger automatically handles FIFO eviction)
-  const result = await db.query(`
-    INSERT INTO chat_message (thread_id, role, content)
-    VALUES ($1, $2, $3)
-    RETURNING id, created_at
-  `, [threadId, role, content]);
+  // Generate message ID in application code
+  const messageId = `${threadId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  return result.rows[0];
+  // Insert message
+  await db.query(`
+    INSERT INTO chat_message (id, thread_id, role, content, metadata)
+    VALUES ($1, $2, $3, $4, $5)
+  `, [messageId, threadId, role, content, metadata ? JSON.stringify(metadata) : null]);
+
+  // Manual FIFO pruning: keep only last 200 messages
+  await db.query(`
+    DELETE FROM chat_message
+    WHERE thread_id = $1
+      AND id NOT IN (
+        SELECT id FROM chat_message
+        WHERE thread_id = $1
+        ORDER BY created_at DESC
+        LIMIT 200
+      )
+  `, [threadId]);
+
+  return messageId;
 }
 
-// Retrieve recent messages for session context (last 10 exchanges = 20 messages)
-async function getRecentMessagesForSession(db, threadId, limit = 20) {
+// Retrieve recent messages for session context
+async function getChatMessages(db, threadId = 'default', limit = 200) {
   const result = await db.query(`
-    SELECT role, content, created_at
+    SELECT id, role, content, metadata, created_at
     FROM chat_message
     WHERE thread_id = $1
     ORDER BY created_at DESC
     LIMIT $2
   `, [threadId, limit]);
 
-  return result.rows.reverse(); // Chronological order for session context
+  // Parse metadata and return in chronological order (oldest first)
+  const messages = result.rows.map(row => ({
+    ...row,
+    metadata: row.metadata ? JSON.parse(row.metadata) : null
+  }));
+
+  return messages.reverse(); // Chronological order for session context
 }
 ```
 

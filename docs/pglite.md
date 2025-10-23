@@ -126,19 +126,21 @@ const db = new PGlite({
 
 ```sql
 -- Main pages table with integrated vector column
+-- Note: content_text removed for storage optimization
+-- See docs/storage-optimization.md for details
 CREATE TABLE IF NOT EXISTS pages (
   id SERIAL PRIMARY KEY,
   url TEXT UNIQUE NOT NULL,
   domain TEXT,
   title TEXT,
-  content_text TEXT,
-  summary TEXT,
+  -- content_text removed (storage optimization)
+  summary TEXT,                    -- AI-generated summary for display
   favicon_url TEXT,
   first_visit_at BIGINT,
   last_visit_at BIGINT,
   visit_count INTEGER DEFAULT 1,
-  embedding vector(384),  -- 384-dimensional vector for embeddings
-  content_tsvector tsvector,  -- Full-text search vector
+  embedding vector(384),           -- 384-dim vector from first 8K chars
+  content_tsvector tsvector,       -- FTS index from full content
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -201,12 +203,15 @@ CREATE INDEX IF NOT EXISTS idx_pages_fts
   ON pages USING gin(content_tsvector);
 
 -- Trigger to automatically update tsvector on insert/update
+-- Note: With content_text removed, tsvector is generated in application code
+-- This trigger only handles cases where tsvector is not explicitly provided
 CREATE OR REPLACE FUNCTION update_content_tsvector()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.content_tsvector :=
-    setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
-    setweight(to_tsvector('english', COALESCE(NEW.content_text, '')), 'B');
+  -- Only update if content_tsvector is NULL (allow app to set it explicitly)
+  IF NEW.content_tsvector IS NULL THEN
+    NEW.content_tsvector := setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A');
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -217,46 +222,30 @@ CREATE TRIGGER trig_update_content_tsvector
   EXECUTE FUNCTION update_content_tsvector();
 ```
 
+**Important:** With the storage optimization, `content_tsvector` is now generated in application code during ingestion using the full extracted content, then the original content is discarded. This trigger serves as a fallback for manual SQL inserts only.
+
 ## Vector Operations with pgvector
 
 ### Storing Embeddings
 
 ```javascript
-async function storePageWithEmbedding(db, pageData, embedding) {
-  // Convert Float32Array from Transformers.js to PostgreSQL array format
-  // embedding is a Float32Array(384) from the BGE model
-  const embeddingArray = `[${Array.from(embedding).join(',')}]`;
-
-  const result = await db.query(`
-    INSERT INTO pages (
-      url, domain, title, content_text,
-      first_visit_at, last_visit_at, embedding
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-    ON CONFLICT (url) DO UPDATE SET
-      title = EXCLUDED.title,
-      content_text = EXCLUDED.content_text,
-      last_visit_at = EXCLUDED.last_visit_at,
-      visit_count = pages.visit_count + 1,
-      embedding = EXCLUDED.embedding,
-      updated_at = CURRENT_TIMESTAMP
-    RETURNING id
-  `, [
-    pageData.url,
-    pageData.domain,
-    pageData.title,
-    pageData.content_text,
-    pageData.firstVisitAt,
-    pageData.lastVisitAt,
-    embeddingArray
-  ]);
-
-  return result.rows[0].id;
-}
-
-// Example: Generate embedding and store page
+// Storage-optimized ingestion: process full content, store only tsvector/embedding/summary
 async function ingestPageWithEmbedding(db, pageData, embedder) {
-  // Generate 384-dimensional embedding using Transformers.js
-  const textToEmbed = `${pageData.title} ${pageData.content_text}`;
+  const fullContent = pageData.content_text || '';
+  const title = pageData.title || 'Untitled';
+  const domain = pageData.domain;
+
+  // 1. Generate content_tsvector from FULL content
+  const tsvectorResult = await db.query(`
+    SELECT
+      setweight(to_tsvector('english', $1), 'A') ||
+      setweight(to_tsvector('english', $2), 'B') as tsvector
+  `, [title, fullContent]);
+  const contentTsvector = tsvectorResult.rows[0].tsvector;
+
+  // 2. Generate embedding from TRUNCATED content (first 8,000 chars)
+  const truncatedContent = fullContent.slice(0, 8000);
+  const textToEmbed = `${title} ${domain} ${truncatedContent}`;
   const embedding = await embedder(textToEmbed, {
     pooling: 'mean',
     normalize: true
@@ -267,7 +256,39 @@ async function ingestPageWithEmbedding(db, pageData, embedder) {
     ? embedding.data
     : new Float32Array(embedding.data);
 
-  return await storePageWithEmbedding(db, pageData, embeddingArray);
+  // Convert to PostgreSQL array format
+  const embeddingStr = `[${Array.from(embeddingArray).join(',')}]`;
+
+  // 3. Store ONLY processed data (no content_text)
+  const result = await db.query(`
+    INSERT INTO pages (
+      url, domain, title, summary, embedding, content_tsvector,
+      first_visit_at, last_visit_at, visit_count
+    ) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, 1)
+    ON CONFLICT (url) DO UPDATE SET
+      title = EXCLUDED.title,
+      summary = EXCLUDED.summary,
+      embedding = EXCLUDED.embedding,
+      content_tsvector = EXCLUDED.content_tsvector,
+      last_visit_at = EXCLUDED.last_visit_at,
+      visit_count = pages.visit_count + 1,
+      updated_at = CURRENT_TIMESTAMP
+    RETURNING id
+  `, [
+    pageData.url,
+    domain,
+    title,
+    pageData.summary || null,
+    embeddingStr,
+    contentTsvector,
+    pageData.firstVisitAt,
+    pageData.lastVisitAt
+  ]);
+
+  // 4. fullContent is now garbage collected - NOT stored in database
+  // See docs/storage-optimization.md for rationale
+
+  return result.rows[0].id;
 }
 ```
 
@@ -306,7 +327,7 @@ async function vectorSearch(db, queryEmbedding, limit = 25, distanceType = 'cosi
   const result = await db.query(`
     SELECT
       id, url, title, domain,
-      content_text, last_visit_at, visit_count,
+      summary, last_visit_at, visit_count,
       ${similarityCalc} AS similarity
     FROM pages
     WHERE embedding IS NOT NULL
@@ -347,7 +368,7 @@ async function fullTextSearch(db, query, limit = 25) {
 
   const result = await db.query(`
     SELECT
-      id, url, title, domain, content_text,
+      id, url, title, domain, summary,
       last_visit_at, visit_count,
       ts_rank(content_tsvector, query) AS rank
     FROM pages,
@@ -385,7 +406,7 @@ async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 
   if (keywords.length > 0) {
     const keywordConditions = keywords.map(term => {
       params.push(`%${term.toLowerCase()}%`);
-      return `(LOWER(title) LIKE $${paramIndex++} OR LOWER(content_text) LIKE $${paramIndex-1})`;
+      return `(LOWER(title) LIKE $${paramIndex++} OR LOWER(summary) LIKE $${paramIndex-1})`;
     });
     whereClause += ` AND (${keywordConditions.join(' OR ')})`;
   }
@@ -396,7 +417,7 @@ async function searchWithKeywords(db, extractedKeywords, originalQuery, limit = 
 
   const vectorResults = await db.query(`
     SELECT
-      id, url, title, domain, content_text, summary,
+      id, url, title, domain, summary,
       last_visit_at, visit_count,
       1 - (embedding <=> $${paramIndex}::vector) AS similarity
     FROM pages
@@ -742,15 +763,16 @@ async function batchInsertPages(db, pages) {
 
   const params = pages.flatMap(page => [
     page.url, page.domain, page.title,
-    page.content_text, page.first_visit_at,
+    page.summary, page.first_visit_at,
     page.last_visit_at, `[${Array.from(page.embedding).join(',')}]`
   ]);
 
   await db.query(`
-    INSERT INTO pages (url, domain, title, content_text,
+    INSERT INTO pages (url, domain, title, summary,
                       first_visit_at, last_visit_at, embedding)
     VALUES ${values}
     ON CONFLICT (url) DO UPDATE SET
+      summary = EXCLUDED.summary,
       last_visit_at = EXCLUDED.last_visit_at,
       visit_count = pages.visit_count + 1
   `, params);
@@ -777,10 +799,10 @@ async function searchWithFallback(db, query, embedding, mode) {
     console.warn('[DB] Full-text search failed, falling back to ILIKE:', error);
     // Final fallback to simple pattern matching
     return await db.query(`
-      SELECT id, url, title, domain, content_text,
+      SELECT id, url, title, domain, summary,
              last_visit_at, visit_count
       FROM pages
-      WHERE title ILIKE $1 OR content_text ILIKE $1
+      WHERE title ILIKE $1 OR summary ILIKE $1
       ORDER BY last_visit_at DESC
       LIMIT 25
     `, [`%${query}%`]);
@@ -816,8 +838,10 @@ async function testVectorOps(db) {
 
 // Verify full-text search
 async function testFTS(db) {
+  // Note: With storage optimization, we generate tsvector in app code
+  // For testing, we can use the trigger fallback
   await db.query(
-    'INSERT INTO pages (url, title, content_text) VALUES ($1, $2, $3)',
+    'INSERT INTO pages (url, title, summary) VALUES ($1, $2, $3)',
     ['test://fts', 'Test Page', 'This is test content for full-text search']
   );
 

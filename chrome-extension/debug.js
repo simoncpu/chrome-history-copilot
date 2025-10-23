@@ -60,14 +60,14 @@ const SAMPLE_QUERIES = [
   'SELECT title, url FROM pages WHERE content_tsvector @@ plainto_tsquery(\'english\', \'AI\') LIMIT 5;',
   'SELECT id, title, url, embedding <=> \'[0.1,0.2,0.3]\' AS distance FROM pages WHERE embedding IS NOT NULL LIMIT 5;',
 
-  // Extension debugging
+  // Extension debugging (content_text removed - using tsvector and summary)
   'SELECT COUNT(*) as pages_with_tsvector FROM pages WHERE content_tsvector IS NOT NULL;',
-  'SELECT url, title, char_length(content_text) as content_length FROM pages WHERE content_text IS NOT NULL LIMIT 5;',
+  'SELECT url, title, length(content_tsvector::text) as tsvector_size FROM pages WHERE content_tsvector IS NOT NULL LIMIT 5;',
 
-  // Content extraction analysis
-  'SELECT url, title, char_length(content_text) as content_len, summary IS NOT NULL as has_summary FROM pages WHERE content_text IS NOT NULL ORDER BY last_visit_at DESC LIMIT 10;',
-  'SELECT domain, COUNT(*) as pages, AVG(char_length(content_text)) as avg_content_len FROM pages WHERE content_text IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10;',
-  'SELECT COUNT(*) as with_content, (SELECT COUNT(*) FROM pages) as total FROM pages WHERE content_text IS NOT NULL AND char_length(content_text) > 100;',
+  // Content extraction analysis (using summary instead of content_text)
+  'SELECT url, title, char_length(summary) as summary_len, summary IS NOT NULL as has_summary FROM pages WHERE summary IS NOT NULL ORDER BY last_visit_at DESC LIMIT 10;',
+  'SELECT domain, COUNT(*) as pages, AVG(char_length(summary)) as avg_summary_len FROM pages WHERE summary IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10;',
+  'SELECT COUNT(*) as with_summary, (SELECT COUNT(*) FROM pages) as total FROM pages WHERE summary IS NOT NULL AND char_length(summary) > 20;',
 
   // Performance analysis
   'SELECT domain, AVG(visit_count) as avg_visits, COUNT(*) as pages FROM pages GROUP BY domain HAVING COUNT(*) > 1 ORDER BY avg_visits DESC LIMIT 10;',
@@ -852,12 +852,13 @@ async function handleAnalyzeRecentPages() {
     const query = `
       SELECT
         url, title, domain,
-        length(content_text) as content_len,
+        length(content_tsvector::text) as tsvector_size,
         summary IS NOT NULL as has_summary,
+        char_length(summary) as summary_len,
         visit_count,
-        datetime(last_visit_at/1000, 'unixepoch') as last_visit
+        to_char(to_timestamp(last_visit_at/1000), 'YYYY-MM-DD HH24:MI:SS') as last_visit
       FROM pages
-      WHERE content_text IS NOT NULL
+      WHERE content_tsvector IS NOT NULL
       ORDER BY last_visit_at DESC
       LIMIT 20
     `;
@@ -867,7 +868,7 @@ async function handleAnalyzeRecentPages() {
       data: { query, writeMode: false }
     });
 
-    displayAnalysisResults(response, 'Recent Pages Analysis');
+    displayAnalysisResults(response, 'Recent Pages Analysis (Storage Optimized)');
   } catch (error) {
     log(`Failed to analyze recent pages: ${error.message}`, 'error');
   }
@@ -879,24 +880,25 @@ async function handleShowContentStats() {
   try {
     const queries = [
       {
-        title: 'Overall Content Stats',
+        title: 'Overall Content Stats (Storage Optimized)',
         query: `
           SELECT
             COUNT(*) as total_pages,
-            COUNT(CASE WHEN content_text IS NOT NULL AND length(content_text) > 100 THEN 1 END) as with_content,
+            COUNT(CASE WHEN content_tsvector IS NOT NULL THEN 1 END) as with_tsvector,
             COUNT(CASE WHEN summary IS NOT NULL THEN 1 END) as with_summary,
-            AVG(length(content_text)) as avg_content_length
+            AVG(length(content_tsvector::text)) as avg_tsvector_size,
+            AVG(char_length(summary)) as avg_summary_length
           FROM pages
         `
       },
       {
-        title: 'Content by Domain',
+        title: 'Content by Domain (Using Summaries)',
         query: `
           SELECT
             domain,
             COUNT(*) as pages,
-            COUNT(CASE WHEN content_text IS NOT NULL THEN 1 END) as with_content,
-            AVG(length(content_text)) as avg_content_len
+            COUNT(CASE WHEN summary IS NOT NULL THEN 1 END) as with_summary,
+            AVG(char_length(summary)) as avg_summary_len
           FROM pages
           GROUP BY domain
           ORDER BY pages DESC
@@ -1536,7 +1538,7 @@ async function handleTestSummarizer() {
     await aiBridge.initialize();
 
     const startTime = performance.now();
-    const summary = await aiBridge.summarize(content, { type: 'tldr', length: 'short' });
+    const summary = await aiBridge.summarize(content, { type: 'tldr', length: 'long' });
     const duration = Math.round(performance.now() - startTime);
 
     let resultsHtml = `<h3>Summarizer Test</h3>`;

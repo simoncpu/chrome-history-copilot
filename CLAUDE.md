@@ -122,12 +122,19 @@ Re‑use and adapt working patterns/code as documented in:
 - `summarization_queue` - Database-backed AI summarization queue with LISTEN/NOTIFY
 
 **Key Features**:
-- **Vector search**: 384-dim embeddings with pgvector cosine similarity (`<=>` operator)
-- **Full-text search**: PostgreSQL tsvector/tsquery with automatic GIN indexes
+- **Vector search**: 384-dim embeddings with pgvector cosine similarity (`<=>` operator) from first 8K chars
+- **Full-text search**: PostgreSQL tsvector/tsquery with automatic GIN indexes from full content
 - **Hybrid retrieval**: RRF (Reciprocal Rank Fusion) + reranking for optimal results
 - **Browser history integration**: Merges PGlite indexed content with Chrome's 90-day history
+- **Storage optimization**: Original content discarded after processing; only tsvector, embeddings, and summaries stored
 
-> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for complete schema, indexes, and query patterns.
+**Storage Efficiency**:
+- 9,000 pages (90-day retention): ~60-75MB total
+- content_tsvector: ~40MB (PostgreSQL FTS index from full content)
+- embeddings: ~13.5MB (384-dim vectors from first 8,000 chars)
+- summaries: ~4.5MB (AI-generated summaries for display)
+
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for complete schema, indexes, and query patterns. See [docs/storage-optimization.md](docs/storage-optimization.md) for optimization rationale.
 
 
 ## Ingestion Pipeline
@@ -137,20 +144,29 @@ Re‑use and adapt working patterns/code as documented in:
 - Extracts main text using Readability-style DOM heuristics
 - Respects privacy: never captures password fields or sensitive inputs
 
-**Processing Flow**:
+**Processing Flow** (Optimized for Storage):
 1. Listen for `chrome.history.onVisited` and `chrome.tabs.onUpdated`
-2. Extract page content via content scripts
-3. Generate 384-dim embedding with Transformers.js
-4. Upsert to `pages` table (updates `visit_count`, `last_visit_at`)
-5. Queue for AI summarization (content >100 chars)
+2. Extract page content via content scripts (full content)
+3. Generate `content_tsvector` (PostgreSQL FTS) from **full content**
+4. Generate 384-dim embedding with Transformers.js from **first 8,000 chars**
+5. Queue for AI summarization (content >100 chars) using **full content**
+6. Upsert to `pages` table with processed data only (tsvector, embedding, summary)
+7. **Original content discarded** - not stored in database
 
 **AI Summarization Queue**:
 - Database-backed with PostgreSQL LISTEN/NOTIFY for instant processing
 - Persistent across extension restarts
 - Status tracking: `pending` → `processing` → `completed`/`failed`
 - Retry logic: up to 3 attempts with 2-second rate limiting
+- Temporary storage: queue items deleted after processing
 
-> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for queue schema and [offscreen.js](chrome-extension/offscreen.js) for processing logic.
+**Storage Strategy**:
+- FTS index (tsvector) captures full content semantics for keyword search
+- Vector embedding focuses on primary content (first 8K chars) for semantic search
+- AI summary provides human-readable description for display
+- Original content not retained (can re-extract on page re-visit)
+
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for queue schema, [docs/storage-optimization.md](docs/storage-optimization.md) for optimization details, and [offscreen.js](chrome-extension/offscreen.js) for processing logic.
 
 
 ## Embeddings and Models (Transformers.js)

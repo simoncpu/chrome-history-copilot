@@ -244,7 +244,7 @@ Remember: You can only reference information from the provided browsing history 
     const sessionOptions = {
       type: options.type || 'tldr', // Fixed typo: 'tl;dr' -> 'tldr'
       format: options.format || 'plain-text',
-      length: options.length || 'short'
+      length: options.length || 'long'
     };
 
     // Add monitor for download progress if requested

@@ -434,13 +434,14 @@ class DatabaseWrapper {
 
   async initializeSchema() {
     // Create main pages table with vector column
+    // Note: content_text column removed - tsvector and embeddings generated in app code from content,
+    // then original content is discarded (not stored) for storage optimization
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS pages (
         id SERIAL PRIMARY KEY,
         url TEXT UNIQUE NOT NULL,
         domain TEXT,
         title TEXT,
-        content_text TEXT,
         summary TEXT,
         favicon_url TEXT,
         first_visit_at BIGINT,
@@ -475,15 +476,15 @@ class DatabaseWrapper {
     `);
 
     // Trigger to automatically update tsvector on insert/update
+    // Note: With content_text removed, this trigger only sets tsvector if NULL (app code provides it)
     await this.db.exec(`
       CREATE OR REPLACE FUNCTION update_content_tsvector()
       RETURNS TRIGGER AS $$
       BEGIN
-        NEW.content_tsvector :=
-          setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
-          setweight(to_tsvector('english', COALESCE(NEW.domain, '')), 'A') ||
-          setweight(to_tsvector('english', COALESCE(NEW.url, '')), 'B') ||
-          setweight(to_tsvector('english', COALESCE(NEW.content_text, '')), 'C');
+        -- Only update if content_tsvector is NULL (allow app to set it explicitly)
+        IF NEW.content_tsvector IS NULL THEN
+          NEW.content_tsvector := setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A');
+        END IF;
         NEW.updated_at := CURRENT_TIMESTAMP;
         RETURN NEW;
       END;
@@ -607,33 +608,34 @@ class DatabaseWrapper {
       const normalizedSummary = typeof pageData.summary === 'string' ? pageData.summary : null;
 
       // Use PostgreSQL UPSERT (INSERT ... ON CONFLICT)
+      // Note: content_text removed, content_tsvector now provided by caller
       const result = await this.db.query(`
         INSERT INTO pages (
-          url, domain, title, content_text, summary, favicon_url,
-          first_visit_at, last_visit_at, visit_count, embedding
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector)
+          url, domain, title, summary, favicon_url,
+          first_visit_at, last_visit_at, visit_count, embedding, content_tsvector
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector, $10)
         ON CONFLICT (url) DO UPDATE SET
           title = EXCLUDED.title,
-          content_text = EXCLUDED.content_text,
           summary = EXCLUDED.summary,
           domain = EXCLUDED.domain,
           favicon_url = EXCLUDED.favicon_url,
           last_visit_at = EXCLUDED.last_visit_at,
           visit_count = pages.visit_count + 1,
           embedding = EXCLUDED.embedding,
+          content_tsvector = EXCLUDED.content_tsvector,
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `, [
         pageData.url || '',
         pageData.domain || '',
         pageData.title || '',
-        pageData.content_text || '',
         normalizedSummary,
         pageData.favicon_url || '',
         pageData.first_visit_at,
         pageData.last_visit_at,
         pageData.visit_count || 1,
-        embeddingArray
+        embeddingArray,
+        pageData.content_tsvector || null
       ]);
 
       const insertedId = result.rows[0]?.id;
@@ -675,11 +677,11 @@ class DatabaseWrapper {
 
       const result = await this.db.query(`
         SELECT
-          id, url, domain, title, content_text, summary, favicon_url,
+          id, url, domain, title, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
           ts_rank_cd(content_tsvector, query) AS text_rank_score,
           ts_rank_cd(content_tsvector, query) AS score,
-          ts_headline('english', content_text, query, 'MaxWords=32, MinWords=1, StartSel=<mark>, StopSel=</mark>') AS snippet
+          COALESCE(summary, title) AS snippet
         FROM pages,
              plainto_tsquery('english', $1) AS query
         WHERE content_tsvector @@ query
@@ -699,16 +701,16 @@ class DatabaseWrapper {
       return result.rows;
     } catch (error) {
       console.error('[DB] Text search failed:', error);
-      // Fallback to ILIKE search
+      // Fallback to ILIKE search (searches title and URL only since content_text removed)
       try {
         const result = await this.db.query(`
           SELECT
-            id, url, domain, title, content_text, summary, favicon_url,
+            id, url, domain, title, summary, favicon_url,
             first_visit_at, last_visit_at, visit_count,
             0.5 AS text_rank_score,
-            content_text AS snippet
+            COALESCE(summary, title) AS snippet
           FROM pages
-          WHERE (title ILIKE $1 OR content_text ILIKE $1)
+          WHERE (title ILIKE $1 OR url ILIKE $1 OR summary ILIKE $1)
             AND url NOT LIKE 'chrome://%'
             AND url NOT LIKE 'chrome-extension://%'
             AND url NOT LIKE 'moz-extension://%'
@@ -743,7 +745,7 @@ class DatabaseWrapper {
 
       const result = await this.db.query(`
         SELECT
-          id, url, domain, title, content_text, summary, favicon_url,
+          id, url, domain, title, summary, favicon_url,
           first_visit_at, last_visit_at, visit_count,
           1 - (embedding <=> $1::vector) AS similarity,
           1 - (embedding <=> $1::vector) AS score,
@@ -957,9 +959,9 @@ class DatabaseWrapper {
     const boostedResults = results.map(result => {
       let boostScore = 0;
 
-      // Boost for keyword matches in title/content
+      // Boost for keyword matches in title/summary (content_text no longer stored)
       if (keywords.keywords && keywords.keywords.length > 0) {
-        const content = [result.title || '', result.content_text || ''].join(' ').toLowerCase();
+        const content = [result.title || '', result.summary || '', result.url || ''].join(' ').toLowerCase();
         const matchCount = keywords.keywords.filter(keyword =>
           content.includes(keyword.toLowerCase())
         ).length;
@@ -1246,27 +1248,39 @@ async function ingestPage(pageInfo) {
       }
     }
 
-    // Generate embedding for content (always create one for sqlite-vec compatibility)
-    // Include title, domain, and content for better semantic matching
+    // Storage optimization: Generate processed data from content, then discard original
     const domain = new URL(pageInfo.url).hostname;
-    const textToEmbed = content.title + ' ' + domain + ' ' + content.text;
+    const fullContent = content.text || '';
+
+    // 1. Generate content_tsvector from FULL content (for PostgreSQL full-text search)
+    const tsvectorQuery = await db.db.query(`
+      SELECT
+        setweight(to_tsvector('english', $1), 'A') ||
+        setweight(to_tsvector('english', $2), 'B') as tsvector
+    `, [content.title || '', fullContent]);
+    const contentTsvector = tsvectorQuery.rows[0].tsvector;
+
+    // 2. Generate embedding from TRUNCATED content (first 8,000 chars for better semantic quality)
+    const truncatedContent = fullContent.slice(0, 8000);
+    const textToEmbed = content.title + ' ' + domain + ' ' + truncatedContent;
     const embedding = textToEmbed.trim().length > 0 ? await embed(textToEmbed) : await embed('webpage');
 
-    // Ensure summary is a string for vec0 metadata
+    // Ensure summary is a string
     if (summary == null) summary = '';
 
-    // Store in database
+    // 3. Store ONLY processed data (tsvector, embedding, summary) - original content discarded
     const pageResult = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
-      content_text: content.text,
       summary: summary,
       domain: domain,
       first_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       last_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       visit_count: 1,
-      embedding: embedding
+      embedding: embedding,
+      content_tsvector: contentTsvector
     });
+    // Note: fullContent is now garbage collected - NOT stored in database
 
     // Notify UI if this is a new page (not just an update)
     if (pageResult.isNew) {
@@ -1317,27 +1331,39 @@ async function ingestCapturedContent(capturedData) {
       }
     }
 
-    // Generate embedding
-    // Include title, domain, and content for better semantic matching
+    // Storage optimization: Generate processed data from content, then discard original
     const domain = capturedData.domain || extractDomain(capturedData.url);
-    const textToEmbed = (capturedData.title || '') + ' ' + domain + ' ' + (capturedData.text || '');
+    const fullContent = capturedData.text || '';
+
+    // 1. Generate content_tsvector from FULL content (for PostgreSQL full-text search)
+    const tsvectorQuery = await db.db.query(`
+      SELECT
+        setweight(to_tsvector('english', $1), 'A') ||
+        setweight(to_tsvector('english', $2), 'B') as tsvector
+    `, [capturedData.title || '', fullContent]);
+    const contentTsvector = tsvectorQuery.rows[0].tsvector;
+
+    // 2. Generate embedding from TRUNCATED content (first 8,000 chars for better semantic quality)
+    const truncatedContent = fullContent.slice(0, 8000);
+    const textToEmbed = (capturedData.title || '') + ' ' + domain + ' ' + truncatedContent;
     const embedding = await embed(textToEmbed);
 
-    // Ensure summary is a string for vec0 metadata
+    // Ensure summary is a string
     if (summary == null) summary = '';
 
-    // Store in database
+    // 3. Store ONLY processed data (tsvector, embedding, summary) - original content discarded
     const pageResult = await db.insert('pages', {
       url: capturedData.url,
       title: capturedData.title,
-      content_text: capturedData.text,
       summary: summary,
       domain: capturedData.domain,
       first_visit_at: Math.floor(capturedData.timestamp || Date.now()),
       last_visit_at: Math.floor(capturedData.timestamp || Date.now()),
       visit_count: 1,
-      embedding: embedding
+      embedding: embedding,
+      content_tsvector: contentTsvector
     });
+    // Note: fullContent is now garbage collected - NOT stored in database
 
     // Notify UI if this is a new page (including browser-only pages being indexed)
     if (pageResult.isNew) {
@@ -1540,10 +1566,10 @@ async function getCombinedHistory({ limit = 25, offset = 0 }) {
     // For empty queries, we need to get all pages sorted by last visit
     const pgliteResults = await db.db.query(`
       SELECT
-        id, url, domain, title, content_text, summary, favicon_url,
+        id, url, domain, title, summary, favicon_url,
         first_visit_at, last_visit_at, visit_count,
         NULL as score,
-        COALESCE(substring(content_text from 1 for 200), title) as snippet
+        COALESCE(summary, title) as snippet
       FROM pages
       WHERE url NOT LIKE 'chrome://%'
         AND url NOT LIKE 'chrome-extension://%'
@@ -1596,7 +1622,7 @@ function mergeHistoryResults(pgliteResults, browserResults) {
         resultMap.set(result.url, {
           ...result,
           source: 'pglite',
-          hasAiSummary: !!(result.summary || result.content_text)
+          hasAiSummary: !!(result.summary)
         });
       }
     });
@@ -1611,7 +1637,6 @@ function mergeHistoryResults(pgliteResults, browserResults) {
           url: result.url,
           title: result.title || 'Untitled',
           domain: extractDomain(result.url),
-          content_text: null,
           summary: null,
           favicon_url: null,
           first_visit_at: result.lastVisitTime || Date.now(),

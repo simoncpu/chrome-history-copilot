@@ -523,12 +523,11 @@ async function generateWithChromeAI(userMessage, isSearchQuery, searchResults, s
       if (searchResults.length === 0 || searchQuality.quality === 'none') {
         // No results found
         console.log('[CHAT] generateWithChromeAI: Search intent but no results found');
-        searchContext = 'SEARCH_STATUS: No relevant results found in browsing history for this search.';
+        searchContext = '[No relevant results found in browsing history for this search]';
       } else if (searchQuality.quality === 'low') {
         // Low confidence results
         console.log('[CHAT] generateWithChromeAI: Search intent with low confidence results');
-        searchContext = 'SEARCH_STATUS: Found potentially relevant results but confidence is low. Suggest these with uncertainty.\n\n' +
-          buildSearchContext(searchResults, searchQuality);
+        searchContext = buildSearchContext(searchResults, searchQuality);
       } else {
         // High confidence results
         console.log('[CHAT] generateWithChromeAI: Search intent with high confidence results');
@@ -568,21 +567,23 @@ Your responsibilities:
 - Don't try to search or reference browsing history
 
 **For search queries (when browsing history context is provided):**
-- NEVER echo or repeat the raw context data - only reference the information within it
+- CRITICAL: NEVER echo, repeat, or show the raw context data (SEARCH_STATUS, ### Confidence, ### Website, etc.) - this is internal formatting
+- Instead, synthesize the information naturally in your own words
 - If SEARCH_STATUS indicates "No relevant results found": Tell the user you couldn't find anything in their browsing history about that topic
-- If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results
-- For high-confidence results: Present them confidently. Only the first result is high-confidence though. Treat the rest as medium or low confidence.
+- If SEARCH_STATUS indicates "low confidence": Express uncertainty but still provide the results naturally
+- For high-confidence results: Present them confidently in a conversational tone
 
 **Using the enriched context:**
-- Reference visit patterns when relevant ("You visited this 3 times" or "You last visited this 2 hours ago")
-- Mention the source website when helpful ("According to github.com..." or "From your Stack Overflow browsing...")
+- Reference visit patterns naturally ("You visited this 3 times" or "You last looked at this 2 hours ago")
+- Mention the source website when helpful ("According to the Immich blog..." or "From your Stack Overflow browsing...")
 - Use recency information to provide context ("This recent article you visited..." vs "This page you looked at last month...")
+- When referencing timing, use natural language based on the context provided
 
 **Response guidelines:**
 - Use **double asterisks** around titles and important terms for emphasis
-- Do not include any links or HTML in responses
+- Do not include any links, HTML, or raw context formatting (##, ###, SEARCH_STATUS) in responses
 - Match the user's tone (casual vs. informational)
-- Keep responses brief and concise
+- Keep responses brief and concise (2-3 sentences max for most queries)
 - Be transparent about search result quality
 - Make use of visit history and timing information to provide better context`
   });
@@ -648,7 +649,7 @@ function analyzeSearchQuality(searchResults) {
 }
 
 // Helper function to format timestamps as relative time
-function formatLastVisit(timestamp) {
+function formatLastVisit(timestamp, longForm = false) {
   try {
     const date = new Date(timestamp);
     const now = new Date();
@@ -657,18 +658,47 @@ function formatLastVisit(timestamp) {
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
-    if (diffMinutes < 60) {
-      return `${diffMinutes}m ago`;
-    } else if (diffHours < 24) {
-      return `${diffHours}h ago`;
-    } else if (diffDays < 7) {
-      return `${diffDays}d ago`;
-    } else if (diffDays < 30) {
-      return `${Math.floor(diffDays / 7)}w ago`;
-    } else if (diffDays < 365) {
-      return `${Math.floor(diffDays / 30)}mo ago`;
+    if (longForm) {
+      // Long form for AI context - explicitly clear time units
+      if (diffMinutes < 1) {
+        return 'just now';
+      } else if (diffMinutes === 1) {
+        return '1 minute ago';
+      } else if (diffMinutes < 60) {
+        return `${diffMinutes} minutes ago`;
+      } else if (diffHours === 1) {
+        return '1 hour ago';
+      } else if (diffHours < 24) {
+        return `${diffHours} hours ago`;
+      } else if (diffDays === 1) {
+        return '1 day ago';
+      } else if (diffDays < 7) {
+        return `${diffDays} days ago`;
+      } else if (diffDays < 30) {
+        const weeks = Math.floor(diffDays / 7);
+        return weeks === 1 ? '1 week ago' : `${weeks} weeks ago`;
+      } else if (diffDays < 365) {
+        const months = Math.floor(diffDays / 30);
+        return months === 1 ? '1 month ago' : `${months} months ago`;
+      } else {
+        const years = Math.floor(diffDays / 365);
+        return years === 1 ? '1 year ago' : `${years} years ago`;
+      }
     } else {
-      return `${Math.floor(diffDays / 365)}y ago`;
+      // Short form for UI display
+      if (diffMinutes < 60) {
+        return `${diffMinutes}m ago`;
+      } else if (diffHours < 24) {
+        return `${diffHours}h ago`;
+      } else if (diffDays < 7) {
+        return `${diffDays}d ago`;
+      } else if (diffDays < 30) {
+        return `${Math.floor(diffDays / 7)}w ago`;
+      } else if (diffDays < 365) {
+        return `${Math.floor(diffDays / 30)}mo ago`;
+      } else {
+        return `${Math.floor(diffDays / 365)}y ago`;
+      }
     }
   } catch (error) {
     return 'unknown';
@@ -696,11 +726,9 @@ function buildSearchContext(searchResults, quality = null) {
 
   let context = '';
 
-  // Add quality context based on confidence level
+  // Add quality indicator for the AI to interpret
   if (quality.quality === 'low') {
-    context += 'Found some potentially relevant browsing history, but matches have low confidence:\n\n';
-  } else {
-    context += 'Found relevant browsing history:\n\n';
+    context += '[NOTE: Low confidence matches - express uncertainty when presenting these results]\n\n';
   }
 
   const contextResults = searchResults.slice(0, 3);
@@ -712,49 +740,50 @@ function buildSearchContext(searchResults, quality = null) {
 
     console.log(`  CONTEXT-${index + 1}. [${confidenceLabel}] "${result.title}" (${(score * 100).toFixed(1)}%) - ${result.url}`);
 
-    // Main title with confidence
-    context += `## ${result.title}\n`;
-    if (quality.quality === 'high' && score >= 0.6) {
-      context += `### Confidence\n`;
-      context += `High confidence: ${(score * 100).toFixed(0)}%\n`;
-    } else if (quality.quality === 'low') {
-      context += `### Confidence\n`;
-      context += `Low confidence: ${(score * 100).toFixed(0)}%\n`;
-    }
+    // Build a clean, narrative-style context entry
+    context += `Page ${index + 1}: "${result.title}"\n`;
+    context += `URL: ${result.url}\n`;
 
-    // Website and URL info
     if (result.domain) {
-      context += `### Website\n${result.domain}\n`;
+      context += `Website: ${result.domain}\n`;
     }
-    context += `### URL\n${result.url}\n`;
 
-    // Visit information
+    // Visit information - use long form for AI clarity
     const visitInfo = [];
     if (result.visit_count && result.visit_count > 1) {
-      visitInfo.push(`${result.visit_count} visits`);
+      visitInfo.push(`visited ${result.visit_count} times`);
     } else {
-      visitInfo.push('1 visit');
+      visitInfo.push('visited once');
     }
 
     if (result.last_visit_at) {
-      visitInfo.push(`last visited ${formatLastVisit(result.last_visit_at)}`);
+      visitInfo.push(`most recently ${formatLastVisit(result.last_visit_at, true)}`);
     }
 
     if (visitInfo.length > 0) {
-      context += `### Visit History\n${visitInfo.join(', ')}\n`;
+      context += `Visit history: ${visitInfo.join(', ')}\n`;
+    }
+
+    // Add confidence note only for the first (most relevant) result
+    if (index === 0) {
+      if (quality.quality === 'high' && score >= 0.6) {
+        context += `Relevance: High confidence match (${(score * 100).toFixed(0)}%)\n`;
+      } else if (quality.quality === 'low') {
+        context += `Relevance: Low confidence match (${(score * 100).toFixed(0)}%)\n`;
+      }
     }
 
     // Main content
     if (result.summary || result.snippet) {
       const content = result.summary || result.snippet;
-      context += `### Content\n${content}\n`;
+      context += `Summary: ${content}\n`;
     }
 
-    context += `\n---\n\n`;
+    context += `\n`;
   });
 
   console.log('[CHAT] buildSearchContext: Context built, total length:', context.length, 'characters');
-  console.log('[CHAT] buildSearchContext: Context preview:', context);
+  console.log('[CHAT] buildSearchContext: Context preview:', context.substring(0, 500) + '...');
 
   return context;
 }

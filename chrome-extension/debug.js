@@ -31,6 +31,10 @@ let checkChromeAI, testKeywordExtraction, testSummarizer, testFullChatFlow;
 let chromeAiTestResults, chromeAiTestContent;
 let testQuery, testContent;
 
+// Preferences elements
+let toggleEnableReranker, toggleEnableRemoteWarm, toggleDisableInputDuringProcessing;
+let modelStatusDebug, refreshModelStatusBtn, savePrefs, reloadEmbeddings;
+
 // State
 let isConnected = false;
 let currentLogs = [];

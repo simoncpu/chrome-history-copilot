@@ -18,32 +18,38 @@ export class KeywordExtractor {
       await this.createExtractionSession(onProgress);
     }
 
-    const instruction = `Analyze the user's query to determine if they are searching for specific information or just chatting.
+    const instruction = `Analyze the user's query to decide if they are searching for information (is_search_query=true) or just chatting (is_search_query=false).
 
-First, determine if this is a search query:
-- Search queries: phrases similar to "find pages about X", "show me articles on Y", "what did I read about Z", "my bookmarks on topic"
+First, decide whether this is a search query.
+- Treat as a search query when the user clearly asks for pages, articles, documents, bookmarks, examples, explanations, or asks "what did I read/about" or similar.
+- If the query is casual chat, opinion, or conversational (no intent to find documents/pages), set is_search_query=false and return an empty keywords array.
 
-Then extract meaningful phrases and concepts only if it's a search query:
+When is_search_query=true, extract a small set of meaningful phrase-level keywords. Follow these rules:
 
-Rules for keyword extraction (only when is_search_query=true):
-- Extract meaningful phrases and concepts, NOT individual words
-- Keep multi-word terms together (e.g., "machine learning", "React hooks", "JavaScript tutorials")
-- Preserve quoted phrases exactly
-- Remove politeness words and filler ("please", "info", "give me", "find", "show me")
-- Use lowercase
-- Focus on the core concepts being searched for
+1) Prioritize noun phrases and adjective+noun pairs. Output phrases that represent the core concept(s) of the search.
+2) Keep multi-word terms together when they form a single concept (e.g., "machine learning", "react hooks", "python tutorials", "energy harvesting").
+3) Remove filler and politeness: "please", "thanks", "find", "show me", "did i", "anything regarding", etc.
+4) Remove vague placeholders and baby words: "thingy", "thing", "stuff", "whatever". If a placeholder is the only content, try to infer a real noun; otherwise drop it.
+5) Remove action words and convert gerunds to the noun form when appropriate: "producing" -> drop or map to "production" only if needed. Prefer core nouns instead of verbs.
+6) Prefer domain nouns over function words: keep "electricity" or "energy" rather than "producing".
+7) Normalize terms: lowercase, strip punctuation, collapse duplicate words.
+8) If multiple candidate phrases exist, return the minimal set that covers the user's intent (avoid long, redundant phrases).
+9) Preserve quoted phrases exactly as one keyword.
+10) If the query is ambiguous, prefer more general but meaningful phrases instead of long literal transcriptions.
 
 Examples:
-- "JavaScript tutorials" → ["javascript tutorials"] (NOT ["javascript", "tutorials"])
-- "machine learning algorithms" → ["machine learning algorithms"] or ["machine learning", "algorithms"]
-- "React hooks documentation" → ["react hooks", "documentation"] (NOT ["react", "hooks", "documentation"])
-- "Python programming" → ["python programming"] (NOT ["python", "programming"])
+- "JavaScript tutorials" -> ["javascript tutorials"]
+- "machine learning algorithms" -> ["machine learning algorithms"] or ["machine learning", "algorithms"]
+- "React hooks documentation" -> ["react hooks", "documentation"]
+- "Did I browse anything regarding wearable thingy producing electricity?" -> ["wearable electricity"]
+- "find articles on energy harvesting wearables" -> ["energy harvesting wearables"] or ["wearable energy harvesting"]
+- "please show me pages about 'quantum entanglement'" -> ["quantum entanglement"]
 
-If not a search query, set is_search_query=false and leave keywords array empty.
+If not a search query, set is_search_query=false and return keywords: [].
 
 User query: "${query}"
 
-Response must be valid JSON with this exact format:
+Response must be valid JSON with exactly this format:
 {
   "is_search_query": true/false,
   "keywords": ["array", "of", "meaningful", "phrases"]

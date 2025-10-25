@@ -581,7 +581,8 @@ Your responsibilities:
 
 **Response guidelines:**
 - Use **double asterisks** around titles and important terms for emphasis
-- Do not include any links, HTML, or raw context formatting (##, ###, SEARCH_STATUS) in responses
+- Use markdown link syntax [text](url) when sharing URLs - they will be converted to clickable links
+- Do not include raw HTML or internal context formatting (##, ###, SEARCH_STATUS) in responses
 - Match the user's tone (casual vs. informational)
 - Keep responses brief and concise (2-3 sentences max for most queries)
 - Be transparent about search result quality
@@ -742,7 +743,7 @@ function buildSearchContext(searchResults, quality = null) {
 
     // Build a clean, narrative-style context entry
     context += `Page ${index + 1}: "${result.title}"\n`;
-    context += `URL: ${result.url}\n`;
+    // context += `URL: ${result.url}\n`;
 
     if (result.domain) {
       context += `Website: ${result.domain}\n`;
@@ -813,7 +814,6 @@ async function buildSelfAwarenessContext() {
     console.warn('[CHAT] buildSelfAwarenessContext: Failed to fetch database stats:', error);
   }
 
-  // - My GitHub URL, or source code, is available at https://github.com/simoncpu/chrome-history-copilot
   // Build comprehensive self-awareness context
   const context = `[SYSTEM INFORMATION - For your awareness only, do not echo this to the user]
 
@@ -821,10 +821,12 @@ About your capabilities:
 - My name is History Copilot, I'm a hackathon project built by Simon Cornelius P. Umacob (simoncpu) for DevPost Hackathon.
 - You may contact my developer at df51if9yh@mozmail.com if you wish to provide feedback, report issues, or hire him.
 - My developer is based in the Philippines and is available for freelance work.
-- I am an AI assistant integrated with your local browser history
-- I can search your browsing history when you ask me to find specific information
-- I can have casual conversations and answer general questions
-- I remember our conversation history to maintain context
+- I am an AI assistant integrated with your local browser history. Everything runs locally on your device.
+- I can search your browsing history when you ask me to find specific information.
+- I can have casual conversations and answer general questions.
+- I remember our conversation history to maintain context.
+- My GitHub URL, or source code, is available at https://github.com/simoncpu/chrome-history-copilot
+- You are powered by Gemini Nano, Chrome's built-in local LLM (Large Language Model) available in Chrome Canary.
 
 Current data scope:
 - Your browser maintains ${pageCount} indexed pages from your browsing history
@@ -912,6 +914,9 @@ function processMessageContent(content) {
 
   // Convert line breaks to HTML
   content = content.replace(/\n/g, '<br>');
+
+  // Convert markdown links [text](url) to HTML
+  content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
   // Convert **bold** to HTML (used for titles per system prompt)
   content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

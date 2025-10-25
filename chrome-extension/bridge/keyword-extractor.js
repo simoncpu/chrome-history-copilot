@@ -18,34 +18,58 @@ export class KeywordExtractor {
       await this.createExtractionSession(onProgress);
     }
 
-    const instruction = `Analyze the user's query to decide if they are searching for information (is_search_query=true) or just chatting (is_search_query=false).
+    const instruction = `Analyze the user's query and decide whether they are searching for information (is_search_query=true) or simply asking a conversational or meta question (is_search_query=false).
 
-First, decide whether this is a search query.
-- Treat as a search query when the user clearly asks for pages, articles, documents, bookmarks, examples, explanations, or asks "what did I read/about" or similar.
-- If the query is casual chat, opinion, or conversational (no intent to find documents/pages), set is_search_query=false and return an empty keywords array.
+Step 1 - Determine if this is a search query
+A query should be treated as a **search query (is_search_query=true)** only when:
+- The user is trying to find or recall pages, articles, documents, bookmarks, or website content they have read or visited.
+- The phrasing clearly indicates an intent to *retrieve information* from the user's browsing history or the web.
+Examples of search phrasing: "find pages about...", "did I read about...", "what did I browse on...", "show me my history about...", etc.
 
-When is_search_query=true, extract a small set of meaningful phrase-level keywords. Follow these rules:
+All other types of questions must be treated as **non-search (is_search_query=false)**, including:
+1. **Meta/self questions** about the assistant, the extension, or its capabilities.
+2. **System/AI introspection** questions (e.g., "are you self aware", "what model are you", "how do you work").
+3. **Extension or tool behavior** questions ("how many pages have you indexed", "does the extension store my data", "how do I install this", "how do you analyze history").
+4. **Programming or configuration** questions about implementation, bugs, or features ("how do I fix the extension", "what API are you using").
+5. **General conversation** or off-topic chatter that is not an attempt to recall or search through data.
 
-1) Prioritize noun phrases and adjective+noun pairs. Output phrases that represent the core concept(s) of the search.
-2) Keep multi-word terms together when they form a single concept (e.g., "machine learning", "react hooks", "python tutorials", "energy harvesting").
-3) Remove filler and politeness: "please", "thanks", "find", "show me", "did i", "anything regarding", etc.
-4) Remove vague placeholders and baby words: "thingy", "thing", "stuff", "whatever". If a placeholder is the only content, try to infer a real noun; otherwise drop it.
-5) Remove action words and convert gerunds to the noun form when appropriate: "producing" -> drop or map to "production" only if needed. Prefer core nouns instead of verbs.
-6) Prefer domain nouns over function words: keep "electricity" or "energy" rather than "producing".
-7) Normalize terms: lowercase, strip punctuation, collapse duplicate words.
-8) If multiple candidate phrases exist, return the minimal set that covers the user's intent (avoid long, redundant phrases).
-9) Preserve quoted phrases exactly as one keyword.
-10) If the query is ambiguous, prefer more general but meaningful phrases instead of long literal transcriptions.
+If the query falls into any of those categories, always output:
+{
+  "is_search_query": false,
+  "keywords": []
+}
 
-Examples:
-- "JavaScript tutorials" -> ["javascript tutorials"]
-- "machine learning algorithms" -> ["machine learning algorithms"] or ["machine learning", "algorithms"]
-- "React hooks documentation" -> ["react hooks", "documentation"]
-- "Did I browse anything regarding wearable thingy producing electricity?" -> ["wearable electricity"]
-- "find articles on energy harvesting wearables" -> ["energy harvesting wearables"] or ["wearable energy harvesting"]
-- "please show me pages about 'quantum entanglement'" -> ["quantum entanglement"]
+Step 2 - When is_search_query=true
+Extract a minimal set of meaningful phrases that represent the *topic being searched*. Follow these rules:
 
-If not a search query, set is_search_query=false and return keywords: [].
+1) Focus on noun phrases or adjective+noun pairs that capture the topic.
+2) Keep multi-word terms together when they form a concept (e.g., "machine learning", "energy harvesting wearables").
+3) Remove filler words, politeness, and vague placeholders ("thingy", "stuff", "please", "anything regarding", etc.).
+4) Remove action words unless central to meaning; prefer core nouns over verbs ("producing electricity" → "electricity").
+5) Normalize to lowercase, strip punctuation, and avoid redundancy.
+6) Preserve quoted phrases exactly as one keyword.
+7) Include only the fewest phrases needed to cover the user's intent.
+
+Step 3 - Examples
+
+Search queries (is_search_query=true):
+- "Did I browse anything regarding wearable thingy producing electricity?"  
+  -> { "is_search_query": true, "keywords": ["wearable electricity"] }
+- "find pages on energy harvesting wearables"  
+  -> { "is_search_query": true, "keywords": ["energy harvesting wearables"] }
+- "what did I read about quantum computing"  
+  -> { "is_search_query": true, "keywords": ["quantum computing"] }
+
+Meta/self/extension questions (is_search_query=false):
+- "how many pages have you indexed?"  
+- "are you self aware?"  
+- "how do you work?"  
+- "what model are you?"  
+- "how do I install the extension?"  
+- "does the extension store my data?"  
+- "what APIs are you using?"  
+- "did you build that chrome copilot?"  
+-> { "is_search_query": false, "keywords": [] }
 
 User query: "${query}"
 

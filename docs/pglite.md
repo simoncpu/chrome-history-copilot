@@ -1012,7 +1012,15 @@ If you encounter "Unknown message type" errors, reload the extension at `chrome:
 
 ## Resources and References
 
+### External Documentation
 - [PGlite Documentation](https://github.com/electric-sql/pglite)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
 - [PostgreSQL Full-Text Search](https://www.postgresql.org/docs/current/textsearch.html)
 - [Vector Similarity Search Best Practices](https://github.com/pgvector/pgvector#best-practices)
+
+### Related Project Documentation
+- **[CLAUDE.md](../CLAUDE.md)** - High-level architecture and project overview
+- **[docs/transformer.md](transformer.md)** - Transformers.js configuration for embeddings
+- **[docs/chrome_api.md](chrome_api.md)** - Chrome AI integration for chat search
+- **[docs/storage-optimization.md](storage-optimization.md)** - Storage optimization strategy
+- **[constitution.md](../constitution.md)** - Extension design principles

@@ -6,14 +6,14 @@ Audience: Engineers building the Chrome extension described here and agents edit
 
 ## Objectives
 
-- Ship a Chrome MV3 extension that provides “LLM‑powered browser history” using Chrome’s on‑device AI APIs in Chrome Canary.
+- Ship a Chrome MV3 extension that provides "LLM‑powered browser history" using Chrome's on‑device AI APIs in Chrome Canary.
 - Store and search history locally using PGlite with pgvector for vector similarity search and PostgreSQL full-text search.
 - Default query mode: Hybrid retrieval with reranking (two‑stage) as described in docs/pglite.md.
 - Offer advanced modes: Hybrid (RRF), Text‑only (PostgreSQL full-text search), Vector‑only.
 - UI delivered via Chrome Side Panel with two pages the user can switch between:
   1) `history_search.html` (default)
   2) `history_chat.html` (Prompt API‑powered chat)
-- Provide a dev/debug page `debug.html` (DB explorer + Clear DB), also reachable from the extension’s context menu.
+- Provide a dev/debug page `debug.html` (DB explorer + Clear DB), also reachable from the extension's context menu.
 
 See also: docs/pglite.md, docs/transformer.md, docs/chrome_api.md, constitution.md.
 
@@ -87,7 +87,7 @@ Re‑use and adapt working patterns/code as documented in:
 - docs/chrome_api.md (Chrome AI Prompt/Summarizer usage)
 - constitution.md (conventions and packaging)
 
-## Recent Implementation Updates (January 2025)
+## Latest Implementation Updates
 
 ### Chrome AI Integration Complete
 - **Full Chrome 138+ API Support**: Integrated global `LanguageModel` and `Summarizer` APIs with proper session management, `initialPrompts`, and `append()` context injection
@@ -222,27 +222,24 @@ The extension combines Chrome's browser history API with PGlite database for com
 - **Fallback summaries**: Browser-only entries show "No AI summary available yet. Visit this page to generate one."
 - **Progressive enhancement**: As users revisit pages, summaries are generated and stored
 
+> **Implementation Details**: See [docs/pglite.md](docs/pglite.md) for browser history integration queries and deduplication logic.
+
 ## Side Panel UI
 
 Two pages; user can toggle between them. Remember the last‑used page and search mode in `chrome.storage.local`.
 
 1) history_search.html (default)
-- Layout:
-  - Input with debounced search (empty query shows all 90-day history)
-  - Results list with favicon (`chrome://favicon`) + title + URL + short summary/snippet
-  - Visual badges for AI summaries and source type (PGlite vs browser history)
-  - Infinite scroll or "Load more"
-  - Loader while querying (skeleton rows or spinner)
-- Advanced panel (slide down/out) allows switching mode: Hybrid+Rerank (default), Hybrid (RRF), Text only, Vector only. Persist selection.
-- Provide clear empty state and robust error handling.
+- Layout: Search input with debounced search, results list with favicon + title + URL + summary
+- Visual badges for AI summaries and source type (PGlite vs browser history)
+- Advanced panel for switching modes: Hybrid+Rerank (default), Hybrid (RRF), Text only, Vector only
+- Empty state and error handling
 
 2) history_chat.html
-- **Two-stage chat search flow**:
-  1. **Keyword extraction**: Chrome AI analyzes query to determine intent and extract search keywords
-  2. **Enhanced search**: Uses extracted keywords for filtered hybrid search (if search query detected)
-  3. **Response generation**: Chrome AI generates conversational response with links to relevant pages
+- **Two-stage chat search flow**: Keyword extraction → Enhanced search → Response generation
 - **Message persistence**: Chat history stored in PGlite with 200-message FIFO limit
 - **Session management**: Uses `initialPrompts` for context, `append()` for dynamic search results
+
+> **Implementation Details**: See [docs/ui.md](docs/ui.md) for UI patterns and [docs/chrome_api.md](docs/chrome_api.md) for chat flow.
 
 ## Chrome AI Integration (Chat)
 
@@ -342,6 +339,8 @@ For detailed implementation patterns, see:
 - **[docs/pglite.md](docs/pglite.md)** - Database schema, vector search, RRF, hybrid reranking
 - **[docs/transformer.md](docs/transformer.md)** - Transformers.js config, embeddings, CSP constraints
 - **[docs/chrome_api.md](docs/chrome_api.md)** - Chrome AI integration, keyword extraction, chat flow
+- **[docs/storage-optimization.md](docs/storage-optimization.md)** - Storage optimization strategy and rationale
+- **[docs/ui.md](docs/ui.md)** - UI design guidelines and patterns
 - **[constitution.md](constitution.md)** - Extension design principles and governance
 
 
@@ -357,14 +356,14 @@ For detailed implementation patterns, see:
 - Local‑first: No browsing history leaves the device. Optional network calls are allowed only when the user enables remote warm‑up to download static model files.
 - Never transmit browsing history or prompts. Keep CSP strict; allow only the minimal hosts needed for model fetch:
   - huggingface.co, *.huggingface.co, hf.co, *.hf.co, cdn.jsdelivr.net
-- Provide a clear “Delete all data” button in debug that drops DB and clears model caches.
+- Provide a clear "Delete all data" button in debug that drops DB and clears model caches.
 
 ### Model policy
 - Default embeddings use a bundled local model (`lib/models/...`).
 - If `aiPrefs.enableRemoteWarm` is true, offscreen may fetch the larger model over HTTPS and cache it, then hot‑swap. Extension URLs are not cached (Cache API does not support chrome‑extension://).
 
 
-## Implemented Features (January 2025)
+## Implemented Features
 
 - **Chat Message Retention**: PGlite-based chat_thread and chat_message tables with automatic FIFO eviction (200 message limit)
 - **Keyword Extraction Service**: Chrome AI-powered keyword extraction with JSON Schema responseConstraint for structured output

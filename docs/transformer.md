@@ -256,10 +256,17 @@ When CSP violations occur, follow these steps:
 6. **Fallback Strategies**: Consider offline-first approaches with local model files for critical applications
 7. **Domain Whitelisting**: Regularly review and update CSP domains as HuggingFace infrastructure evolves
 
-## Recent Updates (September 2024)
+## Latest Updates
 
-### New CDN Infrastructure Discovery
+### CDN Infrastructure Discovery
 - **Issue**: HuggingFace introduced new CDN provider `cas-bridge.xethub.hf.co`
 - **Impact**: Required additional CSP updates beyond wildcard patterns
 - **Resolution**: Added specific domain to manifest.json CSP configuration
 - **Lesson**: Even with wildcard patterns, some third-party CDN bridges require explicit allowlisting
+
+## See Also
+
+- **[CLAUDE.md](../CLAUDE.md)** - High-level architecture and project overview
+- **[docs/pglite.md](pglite.md)** - Database implementation with vector embeddings storage
+- **[docs/chrome_api.md](chrome_api.md)** - Chrome AI integration for chat and summarization
+- **[constitution.md](../constitution.md)** - Extension design principles

@@ -564,7 +564,7 @@ async function generateResponse(userMessage, searchResults) {
 
 ## Current Status
 
-As of the latest implementation (January 2025):
+As of the latest implementation:
 - ✅ **Complete Chrome 138+ API Integration**: Full support for `LanguageModel` and `Summarizer` global APIs
 - ✅ **Chat Search Flow Implementation**: Two-stage keyword extraction → search → response generation
 - ✅ **Keyword Extraction Service**: Uses Prompt API with JSON Schema responseConstraint
@@ -576,7 +576,7 @@ As of the latest implementation (January 2025):
 - ✅ **Debug Interface**: Comprehensive testing tools for all Chrome AI components
 - ✅ **No Fallback Architecture**: Extension requires Chrome AI to be properly configured
 
-## Architecture Simplification (2025 Update)
+## Architecture Simplification (Latest Update)
 
 Following the principle of assuming Chrome AI availability, the codebase has been simplified:
 
@@ -705,7 +705,16 @@ The complete Chrome AI integration can be found in:
 - `chrome-extension/offscreen.js` - Message retention and enhanced search integration
 - `chrome-extension/debug.html` & `debug.js` - Comprehensive testing interface
 
-## Known Chrome Canary Issues (January 2025)
+## See Also
+
+- **[CLAUDE.md](../CLAUDE.md)** - High-level architecture and project overview
+- **[docs/pglite.md](pglite.md)** - Database schema and chat message persistence
+- **[docs/transformer.md](transformer.md)** - Transformers.js embeddings for semantic search
+- **[docs/ui.md](ui.md)** - UI design guidelines for chat interface
+- **[constitution.md](../constitution.md)** - Extension design principles
+- **[Chrome AI Documentation](https://developer.chrome.com/docs/ai/built-in-apis)** - Official Chrome AI API docs
+
+## Known Chrome Canary Issues
 
 ### Output Language Warning (Ignored)
 

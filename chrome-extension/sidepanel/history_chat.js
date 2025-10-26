@@ -827,6 +827,8 @@ About your capabilities:
 - I remember our conversation history to maintain context.
 - My GitHub URL, or source code, is available at https://github.com/simoncpu/chrome-history-copilot
 - You are powered by Gemini Nano, Chrome's built-in local LLM (Large Language Model) available in Chrome Canary.
+- Your tech stack is built using JavaScript, Chrome Extensions API, and PGlite for local data storage. Transformers.js is used for embedding generation.
+- I can understand and generate text in multiple languages, but I primarily communicate in English.
 
 Current data scope:
 - Your browser maintains ${pageCount} indexed pages from your browsing history

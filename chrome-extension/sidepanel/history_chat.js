@@ -96,6 +96,9 @@ function initializeChatPage() {
   // Set up real-time status update listener
   setupStatusUpdateListener();
 
+  // Setup modal event listeners
+  setupModalEventListeners();
+
 }
 
 // Note: Site access is optional; UI initializes regardless. The debug page
@@ -856,24 +859,9 @@ function addAssistantMessage(content, searchResults = [], searchMetadata = null)
   // Process content to make links clickable
   const processedContent = processMessageContent(content);
 
-  let linksHtml = '';
+  let badgesHtml = '';
   if (searchResults.length > 0) {
-    linksHtml = `
-      <div class="message-links">
-        ${searchResults.slice(0, 5).map(result => `
-          <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
-            <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
-            <div class="message-link-content">
-              <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
-              ${result.summary || result.snippet ?
-        `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
-        ''
-      }
-            </div>
-          </a>
-        `).join('')}
-      </div>
-    `;
+    badgesHtml = createFaviconBadges(searchResults);
   }
 
   messageDiv.innerHTML = `
@@ -883,7 +871,7 @@ function addAssistantMessage(content, searchResults = [], searchMetadata = null)
     <div class="message-content">
       <div class="message-text">
         ${processedContent}
-        ${linksHtml}
+        ${badgesHtml}
       </div>
     </div>
   `;
@@ -1359,7 +1347,7 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
   // Process content to make links clickable
   const processedContent = processMessageContent(content);
 
-  let linksHtml = '';
+  let badgesHtml = '';
   let searchPromise = null;
 
   // If this message has search metadata, re-run the search to get fresh results
@@ -1377,29 +1365,14 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
       .then(searchResults => {
         console.log('[CHAT] Re-run search found', searchResults.length, 'results for historical message');
 
-        // Generate links HTML if we have results
+        // Generate badges HTML if we have results
         if (searchResults.length > 0) {
-          const linksHtml = `
-            <div class="message-links">
-              ${searchResults.slice(0, 5).map(result => `
-                <a href="${result.url}" class="message-link" target="_blank" rel="noopener noreferrer">
-                  <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}" class="message-link-favicon" alt="" onerror="this.style.display='none'">
-                  <div class="message-link-content">
-                    <span class="message-link-title">${escapeHtml(result.title || 'Untitled')}</span>
-                    ${result.summary || result.snippet ?
-              `<span class="message-link-summary">${escapeHtml((result.summary || result.snippet).substring(0, 120))}...</span>` :
-              ''
-            }
-                  </div>
-                </a>
-              `).join('')}
-            </div>
-          `;
+          const badgesHtml = createFaviconBadges(searchResults);
 
           // Update the message with search results
           const messageTextDiv = messageDiv.querySelector('.message-text');
           if (messageTextDiv) {
-            messageTextDiv.innerHTML = processedContent + linksHtml;
+            messageTextDiv.innerHTML = processedContent + badgesHtml;
           }
         }
         return searchResults;
@@ -1417,7 +1390,7 @@ async function addAssistantMessageFromHistory(content, metadata = null) {
     <div class="message-content">
       <div class="message-text">
         ${processedContent}
-        ${linksHtml}
+        ${badgesHtml}
       </div>
     </div>
   `;
@@ -1656,6 +1629,134 @@ function handleStatusUpdate(eventType, data) {
       setTimeout(() => checkQueueStatus(), 100);
       break;
   }
+}
+
+/**
+ * Create overlapping favicon badges HTML
+ */
+function createFaviconBadges(searchResults) {
+  const maxVisible = 3;
+  const visibleResults = searchResults.slice(0, maxVisible);
+  const remainingCount = Math.max(0, searchResults.length - maxVisible);
+
+  const badgesHtml = visibleResults.map((result, index) => `
+    <div class="favicon-badge" style="z-index: ${maxVisible - index};"
+         data-result-index="${index}"
+         title="${escapeHtml(result.title)}">
+      <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}"
+           alt="${escapeHtml(result.title)}"
+           onerror="this.src='https://www.google.com/s2/favicons?sz=32&domain=example.com'">
+    </div>
+  `).join('');
+
+  const moreBadge = remainingCount > 0 ?
+    `<div class="favicon-badge more-badge" style="z-index: 0;">+${remainingCount}</div>` : '';
+
+  return `
+    <div class="message-badges" data-search-results='${JSON.stringify(searchResults).replace(/'/g, "&apos;")}'>
+      ${badgesHtml}
+      ${moreBadge}
+      <span class="sources-label">sources</span>
+    </div>
+  `;
+}
+
+/**
+ * Open search results modal
+ */
+function openSearchResultsModal(searchResults) {
+  const modal = document.getElementById('searchResultsModal');
+  const modalTitle = modal.querySelector('.modal-title');
+  const modalResultsList = modal.querySelector('.modal-results-list');
+
+  // Update title
+  modalTitle.textContent = `Search Results (${searchResults.length})`;
+
+  // Generate result cards
+  modalResultsList.innerHTML = searchResults.map(result => `
+    <div class="modal-result-card" data-url="${result.url}">
+      <div class="modal-result-header">
+        <img src="${result.favicon_url || getFaviconUrl(result.url, result.domain)}"
+             class="modal-result-favicon" alt=""
+             onerror="this.src='https://www.google.com/s2/favicons?sz=32&domain=example.com'">
+        <div class="modal-result-info">
+          <div class="modal-result-title">${escapeHtml(result.title || 'Untitled')}</div>
+          <div class="modal-result-url">${escapeHtml(result.url)}</div>
+        </div>
+      </div>
+      ${result.summary || result.snippet ?
+        `<div class="modal-result-snippet">${escapeHtml(result.summary || result.snippet)}</div>` :
+        ''}
+    </div>
+  `).join('');
+
+  // Show modal
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden'; // Prevent background scroll
+
+  // Focus trap
+  const closeBtn = modal.querySelector('.modal-close-btn');
+  closeBtn?.focus();
+}
+
+/**
+ * Close search results modal
+ */
+function closeSearchResultsModal() {
+  const modal = document.getElementById('searchResultsModal');
+  modal.classList.add('hidden');
+  document.body.style.overflow = ''; // Restore scroll
+}
+
+/**
+ * Setup modal event listeners
+ */
+function setupModalEventListeners() {
+  const modal = document.getElementById('searchResultsModal');
+  if (!modal) return;
+
+  // Close button
+  const closeBtn = modal.querySelector('.modal-close-btn');
+  closeBtn?.addEventListener('click', closeSearchResultsModal);
+
+  // Backdrop click
+  const backdrop = modal.querySelector('.modal-backdrop');
+  backdrop?.addEventListener('click', closeSearchResultsModal);
+
+  // ESC key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+      closeSearchResultsModal();
+    }
+  });
+
+  // Result card clicks - open URL
+  modal.addEventListener('click', (e) => {
+    const card = e.target.closest('.modal-result-card');
+    if (card) {
+      const url = card.dataset.url;
+      if (url) {
+        chrome.tabs.create({ url });
+        closeSearchResultsModal();
+      }
+    }
+  });
+
+  // Badge clicks - open modal (event delegation)
+  document.addEventListener('click', (e) => {
+    const badgeContainer = e.target.closest('.message-badges');
+    if (badgeContainer) {
+      const resultsJson = badgeContainer.dataset.searchResults;
+      if (resultsJson) {
+        try {
+          const results = JSON.parse(resultsJson);
+          openSearchResultsModal(results);
+        } catch (err) {
+          console.error('[CHAT] Failed to parse search results:', err);
+        }
+      }
+    }
+  });
 }
 
 // Cleanup on page unload

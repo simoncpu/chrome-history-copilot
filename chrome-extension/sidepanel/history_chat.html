@@ -151,6 +151,27 @@
     </main>
   </div>
 
+  <!-- Search Results Modal -->
+  <div id="searchResultsModal" class="search-results-modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-container">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Search Results</h3>
+          <button class="modal-close-btn" aria-label="Close">
+            <svg class="close-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-results-list">
+          <!-- Results will be populated by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="history_chat.js"></script>
 </body>
 

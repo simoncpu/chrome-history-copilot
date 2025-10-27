@@ -34,6 +34,12 @@ let testQuery, testContent;
 // Preferences elements
 let toggleEnableReranker, toggleEnableRemoteWarm, toggleDisableInputDuringProcessing;
 let modelStatusDebug, refreshModelStatusBtn, savePrefs, reloadEmbeddings;
+// Threshold controls
+let vectorSimilarityThreshold, vectorSimilarityValue;
+let textRankThreshold, textRankValue;
+let hybridRerankThreshold, hybridRerankValue;
+let hybridRrfThreshold, hybridRrfValue;
+let toggleDynamicRelaxation, resetThresholds;
 
 // State
 let isConnected = false;
@@ -208,6 +214,17 @@ function initializeDOMElements() {
   refreshModelStatusBtn = document.getElementById('refreshModelStatus');
   savePrefs = document.getElementById('savePrefs');
   reloadEmbeddings = document.getElementById('reloadEmbeddings');
+  // Threshold controls
+  vectorSimilarityThreshold = document.getElementById('vectorSimilarityThreshold');
+  vectorSimilarityValue = document.getElementById('vectorSimilarityValue');
+  textRankThreshold = document.getElementById('textRankThreshold');
+  textRankValue = document.getElementById('textRankValue');
+  hybridRerankThreshold = document.getElementById('hybridRerankThreshold');
+  hybridRerankValue = document.getElementById('hybridRerankValue');
+  hybridRrfThreshold = document.getElementById('hybridRrfThreshold');
+  hybridRrfValue = document.getElementById('hybridRrfValue');
+  toggleDynamicRelaxation = document.getElementById('toggleDynamicRelaxation');
+  resetThresholds = document.getElementById('resetThresholds');
   // Permissions
   grantAllSitesAccessBtn = document.getElementById('grantAllSitesAccess');
   grantCurrentSiteAccessBtn = document.getElementById('grantCurrentSiteAccess');
@@ -274,6 +291,12 @@ function setupEventListeners() {
   if (savePrefs) savePrefs.addEventListener('click', handleSavePrefs);
   if (reloadEmbeddings) reloadEmbeddings.addEventListener('click', handleReloadEmbeddings);
   if (refreshModelStatusBtn) refreshModelStatusBtn.addEventListener('click', updateModelStatusDebug);
+  // Threshold controls
+  if (vectorSimilarityThreshold) vectorSimilarityThreshold.addEventListener('input', updateThresholdDisplay);
+  if (textRankThreshold) textRankThreshold.addEventListener('input', updateThresholdDisplay);
+  if (hybridRerankThreshold) hybridRerankThreshold.addEventListener('input', updateThresholdDisplay);
+  if (hybridRrfThreshold) hybridRrfThreshold.addEventListener('input', updateThresholdDisplay);
+  if (resetThresholds) resetThresholds.addEventListener('click', handleResetThresholds);
   // Permissions
   if (grantAllSitesAccessBtn) grantAllSitesAccessBtn.addEventListener('click', handleGrantAllSitesAccess);
   if (grantCurrentSiteAccessBtn) grantCurrentSiteAccessBtn.addEventListener('click', handleGrantCurrentSiteAccess);
@@ -345,11 +368,38 @@ function handleOpenExtensionSettings() {
 
 async function loadPreferences() {
   try {
-    const store = await chrome.storage.local.get(['aiPrefs']);
+    const store = await chrome.storage.local.get(['aiPrefs', 'searchThresholds']);
     const prefs = store.aiPrefs || { enableReranker: false, enableRemoteWarm: false, disableInputDuringProcessing: false };
     if (toggleEnableReranker) toggleEnableReranker.checked = !!prefs.enableReranker;
     if (toggleEnableRemoteWarm) toggleEnableRemoteWarm.checked = !!prefs.enableRemoteWarm;
     if (toggleDisableInputDuringProcessing) toggleDisableInputDuringProcessing.checked = !!prefs.disableInputDuringProcessing;
+
+    // Load search thresholds
+    const thresholds = store.searchThresholds || {
+      vectorSimilarity: 0.35,
+      textRank: 0.02,
+      hybridRerank: 0.20,
+      hybridRrf: 0.005,
+      dynamicRelaxation: true
+    };
+    if (vectorSimilarityThreshold) {
+      vectorSimilarityThreshold.value = thresholds.vectorSimilarity;
+      vectorSimilarityValue.textContent = thresholds.vectorSimilarity.toFixed(2);
+    }
+    if (textRankThreshold) {
+      textRankThreshold.value = thresholds.textRank;
+      textRankValue.textContent = thresholds.textRank.toFixed(3);
+    }
+    if (hybridRerankThreshold) {
+      hybridRerankThreshold.value = thresholds.hybridRerank;
+      hybridRerankValue.textContent = thresholds.hybridRerank.toFixed(2);
+    }
+    if (hybridRrfThreshold) {
+      hybridRrfThreshold.value = thresholds.hybridRrf;
+      hybridRrfValue.textContent = thresholds.hybridRrf.toFixed(4);
+    }
+    if (toggleDynamicRelaxation) toggleDynamicRelaxation.checked = !!thresholds.dynamicRelaxation;
+
     // Also refresh model status
     updateModelStatusDebug();
   } catch (e) {
@@ -363,10 +413,20 @@ async function handleSavePrefs() {
     enableRemoteWarm: toggleEnableRemoteWarm ? toggleEnableRemoteWarm.checked : false,
     disableInputDuringProcessing: toggleDisableInputDuringProcessing ? toggleDisableInputDuringProcessing.checked : false
   };
+  const thresholds = {
+    vectorSimilarity: vectorSimilarityThreshold ? parseFloat(vectorSimilarityThreshold.value) : 0.35,
+    textRank: textRankThreshold ? parseFloat(textRankThreshold.value) : 0.02,
+    hybridRerank: hybridRerankThreshold ? parseFloat(hybridRerankThreshold.value) : 0.20,
+    hybridRrf: hybridRrfThreshold ? parseFloat(hybridRrfThreshold.value) : 0.005,
+    dynamicRelaxation: toggleDynamicRelaxation ? toggleDynamicRelaxation.checked : true
+  };
   try {
-    await chrome.storage.local.set({ aiPrefs: prefs });
-    log('Preferences saved', 'info');
+    await chrome.storage.local.set({ aiPrefs: prefs, searchThresholds: thresholds });
+    log('Preferences and thresholds saved', 'info');
+    // Notify offscreen to reload preferences and thresholds
     await chrome.runtime.sendMessage({ type: 'refresh-ai-prefs' });
+    // Update thresholds in offscreen
+    await chrome.runtime.sendMessage({ type: 'set-search-thresholds', data: thresholds });
     await updateModelStatusDebug();
   } catch (e) {
     log(`Failed to save preferences: ${e.message}`, 'error');
@@ -384,6 +444,53 @@ async function handleReloadEmbeddings() {
   } finally {
     hideProgress();
   }
+}
+
+// Threshold control handlers
+function updateThresholdDisplay(event) {
+  const input = event.target;
+  const value = parseFloat(input.value);
+
+  if (input === vectorSimilarityThreshold && vectorSimilarityValue) {
+    vectorSimilarityValue.textContent = value.toFixed(2);
+  } else if (input === textRankThreshold && textRankValue) {
+    textRankValue.textContent = value.toFixed(3);
+  } else if (input === hybridRerankThreshold && hybridRerankValue) {
+    hybridRerankValue.textContent = value.toFixed(2);
+  } else if (input === hybridRrfThreshold && hybridRrfValue) {
+    hybridRrfValue.textContent = value.toFixed(4);
+  }
+}
+
+async function handleResetThresholds() {
+  // Reset to default values
+  const defaults = {
+    vectorSimilarity: 0.35,
+    textRank: 0.02,
+    hybridRerank: 0.20,
+    hybridRrf: 0.005,
+    dynamicRelaxation: true
+  };
+
+  if (vectorSimilarityThreshold) {
+    vectorSimilarityThreshold.value = defaults.vectorSimilarity;
+    vectorSimilarityValue.textContent = defaults.vectorSimilarity.toFixed(2);
+  }
+  if (textRankThreshold) {
+    textRankThreshold.value = defaults.textRank;
+    textRankValue.textContent = defaults.textRank.toFixed(3);
+  }
+  if (hybridRerankThreshold) {
+    hybridRerankThreshold.value = defaults.hybridRerank;
+    hybridRerankValue.textContent = defaults.hybridRerank.toFixed(2);
+  }
+  if (hybridRrfThreshold) {
+    hybridRrfThreshold.value = defaults.hybridRrf;
+    hybridRrfValue.textContent = defaults.hybridRrf.toFixed(4);
+  }
+  if (toggleDynamicRelaxation) toggleDynamicRelaxation.checked = defaults.dynamicRelaxation;
+
+  log('Thresholds reset to defaults', 'info');
 }
 
 // Connection management

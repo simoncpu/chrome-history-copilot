@@ -474,13 +474,56 @@
             <input type="checkbox" id="toggleDisableInputDuringProcessing" class="checkbox">
             <label for="toggleDisableInputDuringProcessing">Disable search/chat inputs during page processing (for debugging UI lockups)</label>
           </div>
-          <div style="margin-left: 24px; color:#64748b; font-size: 13px;">
+
+          <!-- Search Thresholds -->
+          <h3 style="font-size: 16px; font-weight: 600; margin: 20px 0 12px; color: #475569;">Search Relevance Thresholds</h3>
+          <div style="display: grid; gap: 12px;">
+            <div>
+              <label style="display: block; font-size: 13px; margin-bottom: 4px; color: #64748b;">
+                Vector Similarity (0-1): <span id="vectorSimilarityValue" style="font-weight: 600;">0.35</span>
+              </label>
+              <input type="range" id="vectorSimilarityThreshold" min="0" max="1" step="0.05" value="0.35"
+                     style="width: 100%; accent-color: #38bdf8;">
+              <div style="font-size: 12px; color: #94a3b8;">Minimum cosine similarity for vector search results</div>
+            </div>
+            <div>
+              <label style="display: block; font-size: 13px; margin-bottom: 4px; color: #64748b;">
+                Text Rank: <span id="textRankValue" style="font-weight: 600;">0.02</span>
+              </label>
+              <input type="range" id="textRankThreshold" min="0" max="0.1" step="0.01" value="0.02"
+                     style="width: 100%; accent-color: #38bdf8;">
+              <div style="font-size: 12px; color: #94a3b8;">Minimum ts_rank score for text search results</div>
+            </div>
+            <div>
+              <label style="display: block; font-size: 13px; margin-bottom: 4px; color: #64748b;">
+                Hybrid Rerank (0-1): <span id="hybridRerankValue" style="font-weight: 600;">0.20</span>
+              </label>
+              <input type="range" id="hybridRerankThreshold" min="0" max="1" step="0.05" value="0.20"
+                     style="width: 100%; accent-color: #38bdf8;">
+              <div style="font-size: 12px; color: #94a3b8;">Minimum final score for hybrid+rerank mode</div>
+            </div>
+            <div>
+              <label style="display: block; font-size: 13px; margin-bottom: 4px; color: #64748b;">
+                Hybrid RRF: <span id="hybridRrfValue" style="font-weight: 600;">0.005</span>
+              </label>
+              <input type="range" id="hybridRrfThreshold" min="0" max="0.02" step="0.001" value="0.005"
+                     style="width: 100%; accent-color: #38bdf8;">
+              <div style="font-size: 12px; color: #94a3b8;">Minimum RRF score for hybrid-rrf mode</div>
+            </div>
+            <div class="checkbox-container">
+              <input type="checkbox" id="toggleDynamicRelaxation" class="checkbox" checked>
+              <label for="toggleDynamicRelaxation">Enable dynamic threshold relaxation (when too few results)</label>
+            </div>
+          </div>
+
+          <div style="margin-left: 24px; color:#64748b; font-size: 13px; margin-top: 16px;">
             <span id="modelStatusDebug">Model: -</span>
             <button id="refreshModelStatus" class="button button-secondary" style="margin-left:8px; padding:6px 10px;">Refresh</button>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
             <button id="savePrefs" class="button button-primary">Save Preferences</button>
             <button id="reloadEmbeddings" class="button button-secondary">Reload Embeddings</button>
+            <button id="resetThresholds" class="button button-secondary">Reset Thresholds to Defaults</button>
           </div>
         </div>
       </div>

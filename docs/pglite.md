@@ -779,6 +779,188 @@ async function batchInsertPages(db, pages) {
 }
 ```
 
+## Search Relevance Thresholds
+
+The extension implements configurable threshold filtering to improve result quality by excluding weakly related results. Thresholds are applied per search mode and can be adjusted via the debug page.
+
+### Default Threshold Values
+
+```javascript
+const searchThresholds = {
+  vectorSimilarity: 0.35,    // Minimum cosine similarity for vector search (range: 0-1)
+  textRank: 0.02,            // Minimum ts_rank score for text search
+  hybridRerank: 0.20,        // Minimum final score for hybrid+rerank mode (normalized 0-1)
+  hybridRrf: 0.005,          // Minimum RRF score for hybrid-rrf mode
+  dynamicRelaxation: true    // Relax thresholds if too few results (< 5)
+};
+```
+
+### Threshold Application by Search Mode
+
+#### 1. Vector Search Threshold
+
+Filters results based on cosine similarity:
+
+```javascript
+async function vectorSearch(queryEmbedding, limit, offset = 0) {
+  const embeddingArray = `[${Array.from(queryEmbedding).join(',')}]`;
+
+  const result = await db.query(`
+    SELECT
+      id, url, domain, title, summary, favicon_url,
+      first_visit_at, last_visit_at, visit_count,
+      1 - (embedding <=> $1::vector) AS similarity,
+      1 - (embedding <=> $1::vector) AS score,
+      embedding <=> $1::vector AS distance
+    FROM pages
+    WHERE embedding IS NOT NULL
+      AND (1 - (embedding <=> $1::vector)) >= $4  -- Similarity threshold
+      -- ... other filters
+    ORDER BY embedding <=> $1::vector
+    LIMIT $2 OFFSET $3
+  `, [embeddingArray, limit, offset, searchThresholds.vectorSimilarity]);
+
+  return result.rows;
+}
+```
+
+**Rationale**: For 384-dim BGE-small embeddings, cosine similarity < 0.35 typically indicates very weak semantic relevance. This filters random/unrelated matches while keeping moderately related pages.
+
+#### 2. Text Search Threshold
+
+Filters results based on PostgreSQL `ts_rank_cd` scores:
+
+```javascript
+async function textSearch(query, limit, offset = 0) {
+  const tsQuery = query.split(/\s+/)
+    .map(w => `${sanitize(w)}:*`)
+    .join(' | ');
+
+  const result = await db.query(`
+    SELECT
+      id, url, domain, title, summary, favicon_url,
+      first_visit_at, last_visit_at, visit_count,
+      ts_rank_cd(content_tsvector, query) AS text_rank_score,
+      ts_rank_cd(content_tsvector, query) AS score,
+      COALESCE(summary, title) AS snippet
+    FROM pages,
+         to_tsquery('english', $1) AS query
+    WHERE content_tsvector @@ query
+      AND ts_rank_cd(content_tsvector, query) >= $4  -- Text rank threshold
+      -- ... other filters
+    ORDER BY text_rank_score DESC, last_visit_at DESC
+    LIMIT $2 OFFSET $3
+  `, [tsQuery, limit, offset, searchThresholds.textRank]);
+
+  return result.rows;
+}
+```
+
+**Rationale**: ts_rank scores vary by document length and term frequency. Scores < 0.01-0.02 usually indicate minimal lexical overlap. This prevents showing pages with only weak keyword matches.
+
+#### 3. Hybrid + Rerank Threshold
+
+Applies to the final weighted score after reranking:
+
+```javascript
+function rerankCandidates(candidates, query, textResults, vectorResults, needCount) {
+  // ... scoring logic (40% semantic + 30% lexical + 20% recency + 10% visits)
+
+  const scored = candidates.map(doc => {
+    const finalScore = (wVec * vScore) + (wTextRank * tScore) + (wRec * rec) + (wVis * vis);
+    return { ...doc, score: finalScore, finalScore };
+  })
+    .sort((a, b) => b.finalScore - a.finalScore);
+
+  // Apply threshold filtering with dynamic relaxation
+  let threshold = searchThresholds.hybridRerank;
+  let filtered = scored.filter(doc => doc.finalScore >= threshold);
+
+  // Dynamic relaxation: if too few results, relax threshold by 20%
+  if (searchThresholds.dynamicRelaxation && filtered.length < 5 && filtered.length < needCount) {
+    const relaxedThreshold = threshold * 0.8;
+    filtered = scored.filter(doc => doc.finalScore >= relaxedThreshold);
+    logger.debug(`[RERANK] Relaxed threshold from ${threshold.toFixed(3)} to ${relaxedThreshold.toFixed(3)}`);
+  }
+
+  return filtered.slice(0, needCount);
+}
+```
+
+**Rationale**: Final scores are normalized to [0, 1]. A threshold of 0.20 means results need reasonable relevance across multiple signals (either strong semantic OR lexical match, with some recency/visit support). Filters tangentially related pages.
+
+#### 4. Hybrid RRF Threshold
+
+Applies to Reciprocal Rank Fusion scores:
+
+```javascript
+function reciprocalRankFusion(textResults, vectorResults, limit, alpha = 0.4, k = 60) {
+  // ... RRF calculation
+
+  const sorted = Array.from(scores.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, rrfScore]) => ({ ...docMap.get(id), score: rrfScore, rrfScore }));
+
+  // Apply threshold filtering
+  let threshold = searchThresholds.hybridRrf;
+  let filtered = sorted.filter(doc => doc.rrfScore >= threshold);
+
+  // Dynamic relaxation
+  if (searchThresholds.dynamicRelaxation && filtered.length < 5 && filtered.length < limit) {
+    const relaxedThreshold = threshold * 0.8;
+    filtered = sorted.filter(doc => doc.rrfScore >= relaxedThreshold);
+    logger.debug(`[RRF] Relaxed threshold from ${threshold.toFixed(5)} to ${relaxedThreshold.toFixed(5)}`);
+  }
+
+  return filtered.slice(0, limit);
+}
+```
+
+**Rationale**: RRF scores are typically much smaller (1/(k+rank) formula). A threshold of 0.005 filters very low-ranked results from both search methods.
+
+### Dynamic Threshold Relaxation
+
+When enabled, the system automatically relaxes thresholds by 20% if filtering produces fewer than 5 results:
+
+```javascript
+if (searchThresholds.dynamicRelaxation && filtered.length < 5 && filtered.length < needCount) {
+  const relaxedThreshold = threshold * 0.8; // Relax by 20%
+  filtered = scored.filter(doc => doc.finalScore >= relaxedThreshold);
+}
+```
+
+This prevents showing zero results when the database has limited content matching the query, while still filtering very weak matches.
+
+### Configuring Thresholds
+
+Thresholds can be adjusted via the debug page (`chrome-extension://[id]/debug.html`):
+
+1. Navigate to the **Preferences** section
+2. Locate **Search Relevance Thresholds**
+3. Adjust sliders for each search mode:
+   - Vector Similarity: 0-1 (step 0.05)
+   - Text Rank: 0-0.1 (step 0.01)
+   - Hybrid Rerank: 0-1 (step 0.05)
+   - Hybrid RRF: 0-0.02 (step 0.001)
+4. Enable/disable dynamic relaxation
+5. Click **Save Preferences**
+
+Thresholds are persisted to `chrome.storage.local` and applied immediately to all subsequent searches.
+
+### Troubleshooting: "Too Few Results"
+
+If search returns fewer results than expected:
+
+1. **Check threshold settings**: Lower thresholds may be too restrictive for your content
+2. **Review dynamic relaxation**: Ensure it's enabled for better fallback behavior
+3. **Test with different modes**: Try text-only or vector-only modes to isolate issues
+4. **Reset to defaults**: Use "Reset Thresholds to Defaults" button
+
+**Recommended approach**:
+- Start with default thresholds (balanced filtering)
+- Lower thresholds if you need more results (more permissive)
+- Raise thresholds if seeing too many weak matches (more restrictive)
+
 ## Error Handling and Fallbacks
 
 ```javascript

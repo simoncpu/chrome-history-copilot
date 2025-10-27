@@ -20,6 +20,16 @@ let isInitializing = false;
 let initializationPromise = null;
 let aiPrefs = { enableReranker: false, enableRemoteWarm: false };
 
+// Search relevance thresholds
+// These filter out weakly related results while keeping moderately relevant pages
+let searchThresholds = {
+  vectorSimilarity: 0.35,    // Minimum cosine similarity for vector search (range: 0-1)
+  textRank: 0.02,            // Minimum ts_rank score for text search
+  hybridRerank: 0.20,        // Minimum final score for hybrid+rerank mode (normalized 0-1)
+  hybridRrf: 0.005,          // Minimum RRF score for hybrid-rrf mode
+  dynamicRelaxation: true    // Relax thresholds if too few results (< 5)
+};
+
 // Summarization queue state
 let summarizationQueue = [];
 let isProcessingSummaries = false;
@@ -40,7 +50,8 @@ const OFFSCREEN_MESSAGE_TYPES = new Set([
   'ping', 'refresh-ai-prefs', 'reload-embeddings', 'get-model-status',
   'start-remote-warm', 'get-summary-queue-stats', 'process-summary-queue',
   'clear-summary-queue', 'save-chat-message', 'get-chat-messages', 'clear-chat-thread',
-  'get-chat-thread-stats', 'deduplicate-chat-messages'
+  'get-chat-thread-stats', 'deduplicate-chat-messages',
+  'get-search-thresholds', 'set-search-thresholds'
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -192,6 +203,33 @@ async function handleMessage(message, sendResponse) {
         }
         break;
 
+      case 'get-search-thresholds':
+        sendResponse({ status: 'ok', thresholds: searchThresholds });
+        break;
+
+      case 'set-search-thresholds':
+        try {
+          if (message.data && typeof message.data === 'object') {
+            // Update in-memory thresholds
+            searchThresholds = {
+              vectorSimilarity: message.data.vectorSimilarity ?? searchThresholds.vectorSimilarity,
+              textRank: message.data.textRank ?? searchThresholds.textRank,
+              hybridRerank: message.data.hybridRerank ?? searchThresholds.hybridRerank,
+              hybridRrf: message.data.hybridRrf ?? searchThresholds.hybridRrf,
+              dynamicRelaxation: message.data.dynamicRelaxation ?? searchThresholds.dynamicRelaxation
+            };
+            // Persist to chrome.storage.local
+            await chrome.storage.local.set({ searchThresholds });
+            logger.info('[OFFSCREEN] Search thresholds updated:', searchThresholds);
+            sendResponse({ status: 'ok', thresholds: searchThresholds });
+          } else {
+            sendResponse({ error: 'Invalid threshold data' });
+          }
+        } catch (e) {
+          sendResponse({ error: e.message });
+        }
+        break;
+
       case 'get-summary-queue-stats':
         try {
           const stats = await getSummaryQueueStats();
@@ -328,15 +366,25 @@ async function performInitialization() {
 
 async function refreshAiPrefs() {
   try {
-    const stored = await chrome.storage.local.get(['aiPrefs']);
+    const stored = await chrome.storage.local.get(['aiPrefs', 'searchThresholds']);
     if (stored && stored.aiPrefs && typeof stored.aiPrefs === 'object') {
       aiPrefs = {
         enableReranker: !!stored.aiPrefs.enableReranker,
         enableRemoteWarm: !!stored.aiPrefs.enableRemoteWarm
       };
     }
+    if (stored && stored.searchThresholds && typeof stored.searchThresholds === 'object') {
+      searchThresholds = {
+        vectorSimilarity: stored.searchThresholds.vectorSimilarity ?? 0.35,
+        textRank: stored.searchThresholds.textRank ?? 0.02,
+        hybridRerank: stored.searchThresholds.hybridRerank ?? 0.20,
+        hybridRrf: stored.searchThresholds.hybridRrf ?? 0.005,
+        dynamicRelaxation: stored.searchThresholds.dynamicRelaxation ?? true
+      };
+      logger.debug('[OFFSCREEN] Loaded search thresholds:', searchThresholds);
+    }
   } catch (e) {
-    logger.debug('[OFFSCREEN] Failed to load aiPrefs; using defaults');
+    logger.debug('[OFFSCREEN] Failed to load aiPrefs/searchThresholds; using defaults');
   }
 }
 
@@ -690,6 +738,7 @@ class DatabaseWrapper {
         FROM pages,
              to_tsquery('english', $1) AS query
         WHERE content_tsvector @@ query
+          AND ts_rank_cd(content_tsvector, query) >= $4
           AND url NOT LIKE 'chrome://%'
           AND url NOT LIKE 'chrome-extension://%'
           AND url NOT LIKE 'moz-extension://%'
@@ -701,7 +750,7 @@ class DatabaseWrapper {
           AND url NOT LIKE 'javascript:%'
         ORDER BY text_rank_score DESC, last_visit_at DESC
         LIMIT $2 OFFSET $3
-      `, [tsQuery, limit, offset]);
+      `, [tsQuery, limit, offset, searchThresholds.textRank]);
 
       return result.rows;
     } catch (error) {
@@ -757,6 +806,7 @@ class DatabaseWrapper {
           embedding <=> $1::vector AS distance
         FROM pages
         WHERE embedding IS NOT NULL
+          AND (1 - (embedding <=> $1::vector)) >= $4
           AND url NOT LIKE 'chrome://%'
           AND url NOT LIKE 'chrome-extension://%'
           AND url NOT LIKE 'moz-extension://%'
@@ -768,7 +818,7 @@ class DatabaseWrapper {
           AND url NOT LIKE 'javascript:%'
         ORDER BY embedding <=> $1::vector
         LIMIT $2 OFFSET $3
-      `, [embeddingArray, limit, offset]);
+      `, [embeddingArray, limit, offset, searchThresholds.vectorSimilarity]);
 
       return result.rows;
     } catch (error) {
@@ -815,14 +865,28 @@ class DatabaseWrapper {
     });
 
     // Sort by RRF score and return documents
-    return Array.from(scores.entries())
+    const sorted = Array.from(scores.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
       .map(([id, rrfScore]) => ({
         ...docMap.get(id),
         score: rrfScore, // Main score for UI display
         rrfScore // Keep original for debug
       }));
+
+    // Apply threshold filtering with dynamic relaxation
+    let threshold = searchThresholds.hybridRrf;
+    let filtered = sorted.filter(doc => doc.rrfScore >= threshold);
+
+    // Dynamic relaxation: if too few results and relaxation enabled, relax threshold
+    if (searchThresholds.dynamicRelaxation && filtered.length < 5 && filtered.length < limit) {
+      const relaxedThreshold = threshold * 0.8; // Relax by 20%
+      filtered = sorted.filter(doc => doc.rrfScore >= relaxedThreshold);
+      if (filtered.length > 0) {
+        logger.debug(`[RRF] Relaxed threshold from ${threshold.toFixed(5)} to ${relaxedThreshold.toFixed(5)} (results: ${filtered.length})`);
+      }
+    }
+
+    return filtered.slice(0, limit);
   }
 
   rerankCandidates(candidates, query, textResults, vectorResults, needCount) {
@@ -921,10 +985,22 @@ class DatabaseWrapper {
         visitsNorm: vis
       };
     })
-      .sort((a, b) => b.finalScore - a.finalScore)
-      .slice(0, needCount);
+      .sort((a, b) => b.finalScore - a.finalScore);
 
-    return scored;
+    // Apply threshold filtering with dynamic relaxation
+    let threshold = searchThresholds.hybridRerank;
+    let filtered = scored.filter(doc => doc.finalScore >= threshold);
+
+    // Dynamic relaxation: if too few results and relaxation enabled, relax threshold
+    if (searchThresholds.dynamicRelaxation && filtered.length < 5 && filtered.length < needCount) {
+      const relaxedThreshold = threshold * 0.8; // Relax by 20%
+      filtered = scored.filter(doc => doc.finalScore >= relaxedThreshold);
+      if (filtered.length > 0) {
+        logger.debug(`[RERANK] Relaxed threshold from ${threshold.toFixed(3)} to ${relaxedThreshold.toFixed(3)} (results: ${filtered.length})`);
+      }
+    }
+
+    return filtered.slice(0, needCount);
   }
 
   // Enhanced search with keyword filtering

@@ -434,7 +434,7 @@ class DatabaseWrapper {
 
   async initializeSchema() {
     // Create main pages table with vector column
-    // Note: content_text column removed - tsvector and embeddings generated in app code from content,
+    // Note: content_text column removed - tsvector generated from full content, embeddings from AI summaries,
     // then original content is discarded (not stored) for storage optimization
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS pages (
@@ -586,12 +586,6 @@ class DatabaseWrapper {
   }
 
   async insertPage(pageData) {
-    // For pgvector, we need to provide a valid embedding or skip the row
-    if (!pageData.embedding) {
-      console.warn('[DB] Skipping page without embedding:', pageData.url);
-      return { id: null };
-    }
-
     // Check if this URL already exists to determine if it's a new page
     let isNewPage = false;
     try {
@@ -603,12 +597,14 @@ class DatabaseWrapper {
     }
 
     try {
-      // Convert Float32Array to PostgreSQL array format
-      const embeddingArray = `[${Array.from(pageData.embedding).join(',')}]`;
+      // Convert Float32Array to PostgreSQL array format, or NULL if not provided
+      const embeddingArray = pageData.embedding
+        ? `[${Array.from(pageData.embedding).join(',')}]`
+        : null;
       const normalizedSummary = typeof pageData.summary === 'string' ? pageData.summary : null;
 
       // Use PostgreSQL UPSERT (INSERT ... ON CONFLICT)
-      // Note: content_text removed, content_tsvector now provided by caller
+      // Note: Embedding may be NULL initially and populated later from AI summary
       const result = await this.db.query(`
         INSERT INTO pages (
           url, domain, title, summary, favicon_url,
@@ -1269,15 +1265,13 @@ async function ingestPage(pageInfo) {
     `, [content.title || '', fullContent]);
     const contentTsvector = tsvectorQuery.rows[0].tsvector;
 
-    // 2. Generate embedding from TRUNCATED content (first 8,000 chars for better semantic quality)
-    const truncatedContent = fullContent.slice(0, 8000);
-    const textToEmbed = content.title + ' ' + domain + ' ' + truncatedContent;
-    const embedding = textToEmbed.trim().length > 0 ? await embed(textToEmbed) : await embed('webpage');
+    // 2. Embedding will be generated from AI summary (after summarization completes)
+    // Initial ingestion stores NULL embedding - populated later from summary for better semantic quality
 
     // Ensure summary is a string
     if (summary == null) summary = '';
 
-    // 3. Store ONLY processed data (tsvector, embedding, summary) - original content discarded
+    // 3. Store ONLY processed data (tsvector, summary) - original content discarded, embedding deferred
     const pageResult = await db.insert('pages', {
       url: pageInfo.url,
       title: content.title,
@@ -1286,7 +1280,7 @@ async function ingestPage(pageInfo) {
       first_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       last_visit_at: Math.floor(pageInfo.visitTime || Date.now()),
       visit_count: 1,
-      embedding: embedding,
+      embedding: null, // Will be populated from AI summary
       content_tsvector: contentTsvector
     });
     // Note: fullContent is now garbage collected - NOT stored in database
@@ -1352,15 +1346,13 @@ async function ingestCapturedContent(capturedData) {
     `, [capturedData.title || '', fullContent]);
     const contentTsvector = tsvectorQuery.rows[0].tsvector;
 
-    // 2. Generate embedding from TRUNCATED content (first 8,000 chars for better semantic quality)
-    const truncatedContent = fullContent.slice(0, 8000);
-    const textToEmbed = (capturedData.title || '') + ' ' + domain + ' ' + truncatedContent;
-    const embedding = await embed(textToEmbed);
+    // 2. Embedding will be generated from AI summary (after summarization completes)
+    // Initial ingestion stores NULL embedding - populated later from summary for better semantic quality
 
     // Ensure summary is a string
     if (summary == null) summary = '';
 
-    // 3. Store ONLY processed data (tsvector, embedding, summary) - original content discarded
+    // 3. Store ONLY processed data (tsvector, summary) - original content discarded, embedding deferred
     const pageResult = await db.insert('pages', {
       url: capturedData.url,
       title: capturedData.title,
@@ -1369,7 +1361,7 @@ async function ingestCapturedContent(capturedData) {
       first_visit_at: Math.floor(capturedData.timestamp || Date.now()),
       last_visit_at: Math.floor(capturedData.timestamp || Date.now()),
       visit_count: 1,
-      embedding: embedding,
+      embedding: null, // Will be populated from AI summary
       content_tsvector: contentTsvector
     });
     // Note: fullContent is now garbage collected - NOT stored in database
@@ -2134,11 +2126,23 @@ async function processSummaryQueue() {
       );
 
       if (aiSummary && typeof aiSummary === 'string' && aiSummary.trim().length > 0) {
-        // Update database with the AI-generated summary
-        const updateResult = await db.updateSummaryByUrl(item.url, aiSummary);
+        // Generate embedding from AI summary for semantic search
+        console.log(`[SUMMARIZATION] Generating embedding from summary for: ${item.url}`);
+        const summaryEmbedding = await embed(aiSummary);
 
-        if (updateResult && updateResult.success) {
-          console.log(`[SUMMARIZATION] ✅ Successfully updated summary for: ${item.url}`);
+        // Update database with both AI-generated summary AND embedding
+        const updateResult = await db.db.query(`
+          UPDATE pages
+          SET summary = $1, embedding = $2::vector, updated_at = CURRENT_TIMESTAMP
+          WHERE url = $3
+        `, [
+          aiSummary,
+          summaryEmbedding ? `[${Array.from(summaryEmbedding).join(',')}]` : null,
+          item.url
+        ]);
+
+        if (updateResult && updateResult.rowCount > 0) {
+          console.log(`[SUMMARIZATION] ✅ Successfully updated summary and embedding for: ${item.url}`);
           summaryQueueStats.completed++;
 
           // Mark item as completed in queue
